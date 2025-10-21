@@ -61,7 +61,7 @@ async def fetch_youtube_details_from_api(video_url: str) -> str:
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-2.5-flash',
     tools=[fetch_youtube_details_from_api]
 )
 
