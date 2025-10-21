@@ -1,7 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
-import httpx
+import httpx # Yeh abhi bhi zaroori hai
 import threading
 from flask import Flask
 
@@ -44,17 +44,22 @@ Your core rules:
 4.  **Goal:** Be helpful.
 """
 
-# --- 3. TOOL DEFINITION ---
-async def fetch_youtube_details_from_api(video_url: str) -> str:
-    logger.info(f"[AUTOMATIC] Gemini is calling the tool for URL: {video_url}")
+# --- 3. TOOL DEFINITION (Ab yeh Synchronous hai) ---
+# YAHI HAI ASLI BADLAV
+def fetch_youtube_details_from_api(video_url: str) -> str:
+    """
+    Calls a Vercel API to get YouTube details.
+    This is a SYNCHRONOUS function to work with automatic function calling.
+    """
+    logger.info(f"[AUTOMATIC-SYNC] Gemini is calling the tool for URL: {video_url}")
     try:
-        # NOTE: Automatic function calling library works best with synchronous functions.
-        # We will use httpx's sync client here.
+        # AsyncClient ki jagah normal Client ka istemaal
         with httpx.Client() as client:
             params = {"youtubeUrl": video_url}
+            # 'await' hata diya gaya hai
             response = client.get(VERCEL_API_URL, params=params, timeout=45.0)
             response.raise_for_status()
-            logger.info("[AUTOMATIC] Successfully received data from Vercel API.")
+            logger.info("[AUTOMATIC-SYNC] Successfully received data from Vercel API.")
             return response.text
     except Exception as e:
         error_message = f"Transcript laane mein dikkat aayi: {e}"
@@ -64,7 +69,7 @@ async def fetch_youtube_details_from_api(video_url: str) -> str:
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
-    tools=[fetch_youtube_details_from_api]
+    tools=[fetch_youtube_details_from_api] # Sahi tareeka
 )
 user_chats = {}
 
@@ -76,14 +81,13 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             {'role': 'user', 'parts': [{'text': system_prompt}]},
             {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am MantraAIBot, ready to chat with {user_name}! 😎"}]}
         ]
-        # YAHI HAI GOOGLE KA MAGIC!
         user_chats[user_id] = model.start_chat(
             history=initial_history,
-            enable_automatic_function_calling=True # <-- IS LINE KO ENABLE KAR DIYA
+            enable_automatic_function_calling=True
         )
     return user_chats[user_id]
 
-# --- 5. TELEGRAM HANDLERS ---
+# --- 5. TELEGRAM HANDLERS (Ismein koi badlav nahi) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
@@ -102,11 +106,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
-        # DEKHIYE! Ab code kitna saaf ho gaya hai.
-        # Library saara jaadu khud kar legi.
         response = await chat_session.send_message_async(message_text)
         await update.message.reply_text(response.text)
-
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
         await update.message.reply_text("⚠️ माफ करना, कुछ तकनीकी दिक्कत आ गई है।")
