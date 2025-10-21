@@ -1,7 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
-import httpx # Yeh abhi bhi zaroori hai
+import httpx
 import threading
 from flask import Flask
 
@@ -25,7 +25,7 @@ def run_flask():
 load_dotenv()
 TOKEN = os.environ['BOT_TOKEN']
 GEMINI_KEY = os.environ['GEMINI_KEY']
-VERCEL_API_URL = "https://gyanflow-backend-n5clvllqw-badals-projects-03fab3df.vercel.app/api/getTranscript"
+VERCEL_API_URL = "https://youtube-transcript-dp2flwk98-badals-projects-03fab3df.vercel.app/api/transcript"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,38 +44,57 @@ Your core rules:
 4.  **Goal:** Be helpful.
 """
 
-# --- 3. TOOL DEFINITION (Ab yeh Synchronous hai) ---
-# YAHI HAI ASLI BADLAV
-def fetch_youtube_details_from_api(video_url: str) -> str:
+# --- 3. TOOL DEFINITION (Ab yeh seedha ID leta hai) ---
+# BADLAV #1: Ab function poora URL nahi, balki seedha Video ID lega.
+def fetch_youtube_details_from_api(video_id: str) -> str:
     """
-    Calls a Vercel API to get YouTube details.
-    This is a SYNCHRONOUS function to work with automatic function calling.
+    Gets transcript and details for a YouTube video using its VIDEO ID.
+    When a user provides a full YouTube URL, you MUST first extract the 11-character video ID
+    (e.g., from 'https://youtu.be/lgl16xZeS3o', the ID is 'lgl16xZeS3o')
+    and pass ONLY that ID to this function.
     """
-    logger.info(f"[AUTOMATIC-SYNC] Gemini is calling the tool for URL: {video_url}")
+    logger.info(f"[GEMINI-WORKER] Gemini extracted ID: {video_id} and is calling the tool.")
+    
+    if not video_id or len(video_id) != 11:
+        return "Error: Invalid YouTube Video ID received."
+
     try:
-        # AsyncClient ki jagah normal Client ka istemaal
         with httpx.Client() as client:
-            params = {"youtubeUrl": video_url}
-            # 'await' hata diya gaya hai
-            response = client.get(VERCEL_API_URL, params=params, timeout=45.0)
+            api_url_with_param = f"{VERCEL_API_URL}?v={video_id}"
+            response = client.get(api_url_with_param, timeout=45.0)
             response.raise_for_status()
-            logger.info("[AUTOMATIC-SYNC] Successfully received data from Vercel API.")
-            return response.text
+            data = response.json()
+
+            if not data or not data.get("success"):
+                return "Maaf karna, backend se transcript laane mein dikkat aayi."
+
+            formatted_text = f"""
+वीडियो टाइटल: {data.get('title', 'N/A')}
+चैनल: {data.get('channelTitle', 'N/A')}
+सब्सक्राइबर: {data.get('channelSubscribers', 'N/A')}
+व्यूज: {data.get('viewCount', 'N/A')}
+लाइक्स: {data.get('likeCount', 'N/A')}
+━━━━━━━━━━━━━━━━━━━━━━━
+ट्रांसक्रिप्ट:
+{data.get('transcript', 'Transcript not available.')}
+"""
+            logger.info("[GEMINI-WORKER] Successfully formatted data for Gemini.")
+            return formatted_text
+
     except Exception as e:
-        error_message = f"Transcript laane mein dikkat aayi: {e}"
+        error_message = f"Backend se transcript laane mein dikkat aayi: {e}"
         logger.error(error_message)
         return error_message
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
-    model_name='gemini-2.5-flash',
-    tools=[fetch_youtube_details_from_api] # Sahi tareeka
+    model_name='gemini-1.5-flash',
+    tools=[fetch_youtube_details_from_api]
 )
 user_chats = {}
 
 def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
     if user_id not in user_chats:
-        logger.info(f"Creating new chat session for user {user_name} ({user_id}).")
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(user_name=user_name)
         initial_history = [
             {'role': 'user', 'parts': [{'text': system_prompt}]},
@@ -110,7 +129,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
-        await update.message.reply_text("⚠️ माफ करना, कुछ तकनीकी दिक्कत आ गई है।")
+        await update.message.reply_text("⚠️ माफ करना, कुछ तकनीकी दिक्कत आ गई ਹੈ।")
 
 # --- 6. MAIN BOT EXECUTION ---
 def run_bot():
