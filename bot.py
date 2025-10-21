@@ -69,7 +69,7 @@ async def fetch_youtube_details_from_api(video_url: str) -> str:
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash', # Yahan 1.5 use karein, 2.5 abhi nahi aaya hai
+    model_name='gemini-2.5-flash', # Yahan 1.5 use karein, 2.5 abhi nahi aaya hai
     tools=[fetch_youtube_details_from_api]
 )
 user_chats = {}
