@@ -2,8 +2,17 @@ import os
 import logging
 from dotenv import load_dotenv
 import httpx
-import threading  # Bot aur web server ko ek saath chalaane ke liye
-from flask import Flask # Render ko "alive" signal dene ke liye
+import threading
+from flask import Flask
+
+# Telegram Bot Library
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+
+# Gemini AI Library (Yahan galti thi, ab theek hai)
+import google.generativeai as genai
+from google.generativeai.types import content_types
+
 
 # --- 0. FLASK WEB SERVER SETUP ---
 # Yeh chhota sa web server Render ko busy rakhega
@@ -11,7 +20,7 @@ app_flask = Flask(__name__)
 
 @app_flask.route('/')
 def hello_world():
-    return "MantraAIBot is alive!"
+    return "MantraAIBot is alive and kicking!"
 
 def run_flask():
     # Render.com apne aap PORT environment variable set karta hai
@@ -30,6 +39,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Ab 'genai' defined hai, toh yeh line kaam karegi
 genai.configure(api_key=GEMINI_KEY)
 
 # --- 2. SYSTEM PROMPT ---
@@ -60,10 +70,10 @@ async def fetch_youtube_details_from_api(video_url: str) -> str:
         return error_message
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
-AVAILABLE_TOOLS = {'fetch_youtube_details_from_api': fetch_youtube_details_from_api}
+# Yahan doosri galti thi, ab theek hai
 model = genai.GenerativeModel(
     model_name='gemini-1.5-flash',
-    tools=list(AVAILABLE_TOOLS.keys())
+    tools=[fetch_youtube_details_from_api]  # Ab hum poora function object de rahe hain
 )
 user_chats = {}
 
@@ -100,11 +110,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if candidate.finish_reason == 'TOOL_CALLS':
             tool_call = candidate.content.parts[0].function_call
             tool_name = tool_call.name
-            if tool_name in AVAILABLE_TOOLS:
-                tool_function = AVAILABLE_TOOLS[tool_name]
+            if tool_name == 'fetch_youtube_details_from_api':
                 tool_args = {key: value for key, value in tool_call.args.items()}
-                tool_response_data = await tool_function(**tool_args)
-                tool_response_part = genai.types.content_types.to_part({
+                tool_response_data = await fetch_youtube_details_from_api(**tool_args)
+                tool_response_part = content_types.to_part({
                     "function_response": {"name": tool_name, "response": {"content": tool_response_data}}
                 })
                 second_response = await chat_session.send_message_async(tool_response_part)
