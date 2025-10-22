@@ -77,7 +77,7 @@ from tools.tool_manager import AVAILABLE_TOOLS
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-2.5-flash',
     tools=AVAILABLE_TOOLS
 )
 user_chats = {} # Conversation history
