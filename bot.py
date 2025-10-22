@@ -4,11 +4,14 @@ from dotenv import load_dotenv
 import httpx
 import threading
 from flask import Flask
+
+# Telegram Bot Library
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Gemini AI Library
 import google.generativeai as genai
+from google.genai.types import Tool, GoogleSearch
 
 # --- 0. FLASK WEB SERVER SETUP ---
 app_flask = Flask(__name__)
@@ -28,19 +31,25 @@ VERCEL_API_URL = "https://youtube-transcript-dp2flwk98-badals-projects-03fab3df.
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Gemini API key setup
 genai.configure(api_key=GEMINI_KEY)
 
 # --- 2. SYSTEM PROMPT ---
 SYSTEM_PROMPT_TEMPLATE = """
-You are MantraAI 🤖. You are accessible by Telegram users. Your personality is friendly, witty, and helpful.
-When real-time or fresh data is needed, always use the live search tool (Google Search grounding) to fetch latest results. Provide grounded answers with clear citations.
-You are talking to a user named '{user_name}'. You can know the name of the user from his Telegram ID.
-Tone: Hindi (Devanagari) with Hinglish touches, emojis, concise.
+You are MantraAI 🤖. You are available and are accessible by Telegram users through the Telegram bot feature. Your personality is friendly, witty, and helpful.
+You are talking to a user named '{user_name}'. You can know the name of the user from his Telegram ID and from which ID the message has come. 
+
+Your core rules:
+1.  **Tone:** Be conversational. Answer in the same language the user asked. For Hindi, use 👉 देवनागरी 👈script and mix some English (Hinglish) to be realistic.
+2.  **Emojis:** Use emojis to be engaging. 😎🔥🎬💡
+3.  **Context:** When you get YouTube tool info, use it! Mention the channel name, views etc.
+4.  **Goal:** Be helpful.
+5.  **tools:** Whenever a user’s question requires current or real-time information beyond your training data, use the Google Search tool to fetch live results. Always ground your answers in the latest web search data and cite your sources. For general knowledge, answer using your internal knowledge base. Be concise and accurate.
+information about you : You were created and trained by the MANTRA AI team so you can help people 100% free.You are being accessed from the Telegram app.
+limitation and solutions:This is a Telegram app, so there is no markdown support here. To work around this, you can use Special fonts, for example →𝗧𝗲𝘅𝘁(bold),𝑇𝑒𝑥𝑡(italic),𝙏𝙚𝙭𝙩(italic bold),𝚃𝚎𝚡𝚝(Monospace),𝙏𝙚𝙭𝙩(Sans-Serif Bold Italic) And you will have to pay better attention to structuring your response to make it look neat and tidy.
+upcoming features:You will be able to convert many files into different formats like pdf to image, image to pdf, jpg to png, png to jpg etc. You will be able to convert files in many such formats as per your wish.Secondly, you will be able to create new things like image generation, PDF generation.third You will be able to generate quizzes which will help students to check their exam preparation.Fourthly, you will be able to view and analyze images, pdf, txt directly which will further help the user. 
 """
 
 # --- 3. TOOL DEFINITION ---
-# YouTube Transcript Getter
 def fetch_youtube_details_from_api(video_id: str) -> str:
     logger.info(f"[GEMINI-WORKER] Gemini extracted ID: {video_id} and is calling the tool.")
     if not video_id or len(video_id) != 11:
@@ -53,51 +62,29 @@ def fetch_youtube_details_from_api(video_id: str) -> str:
             data = response.json()
             if not data or not data.get("success"):
                 return "Maaf karna, backend se transcript laane mein dikkat aayi."
-            formatted_text = (
-                f"वीडियो टाइटल: {data.get('title', 'N/A')}
-"
-                f"चैनल: {data.get('channelTitle', 'N/A')}
-"
-                f"सब्सक्राइबर: {data.get('channelSubscribers', 'N/A')}
-"
-                f"व्यूज: {data.get('viewCount', 'N/A')}
-"
-                f"लाइक्स: {data.get('likeCount', 'N/A')}
-"
-                "━━━━━━━━━━━━━━━━━━━━━━━
-"
-                f"ट्रांसक्रिप्ट:
-{data.get('transcript', 'Transcript not available.')}"
-            )
+            formatted_text = f"""वीडियो टाइटल: {data.get('title', 'N/A')}
+चैनल: {data.get('channelTitle', 'N/A')}
+सब्सक्राइबर: {data.get('channelSubscribers', 'N/A')}
+व्यूज: {data.get('viewCount', 'N/A')}
+लाइक्स: {data.get('likeCount', 'N/A')}
+━━━━━━━━━━━━━━━━━━━━━━━
+ट्रांसक्रिप्ट:
+{data.get('transcript', 'Transcript not available.')}
+"""
+            logger.info("[GEMINI-WORKER] Successfully formatted data for Gemini.")
             return formatted_text
     except Exception as e:
-        logger.error(f"Backend se transcript laane mein dikkat aayi: {e}")
-        return "Backend se transcript laane mein dikkat aayi."
+        error_message = f"Backend se transcript laane mein dikkat aayi: {e}"
+        logger.error(error_message)
+        return error_message
 
-# Google Search grounding tool placeholder (actual integration is handled by Gemini SDK)
-# We simply declare a placeholder to illustrate the intent in this standalone code.
-# In real deployment, register the official tool object as per the SDK version.
-
-def google_search_placeholder(query: str) -> str:
-    # This is a placeholder function. In actual deployment, the Gemini SDK will handle
-    # invocation of the live search tool and return grounded results with citations.
-    return "कृपया अपनी क्वेरी दें ताकि live search results आपके लिए fetch किये जा सकें।"
+# Proper Google Search tool registration (official method)
+google_search_tool = Tool(google_search=GoogleSearch())
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
-# Proper tool registrations depend on your SDK version.
-# The following assumes the SDK accepts a list of tool callables or properly registered tools.
-
-# Build tool list: include both the custom function and the Google Search grounding tool
-tools = [
-    fetch_youtube_details_from_api,           # custom YouTube transcript tool
-    google_search_placeholder                 # placeholder for Google Search grounding
-]
-
 model = genai.GenerativeModel(
     model_name='gemini-2.5-flash',
-    # In a real setup, replace the placeholder with the actual tool registration object, e.g.:
-    # tools=[custom_tool, google_search_tool]
-    tools=tools
+    tools=[fetch_youtube_details_from_api, google_search_tool]
 )
 
 user_chats = {}
@@ -120,18 +107,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
-    welcome_instruction = "नमस्ते! मैं MantraAIBot हूँ। आप मुझसे सवाल कर सकते हैं या YouTube वीडियो का सारांश पूछ सकते हैं।"
+    welcome_instruction = "Please greet me warmly as a new user. Introduce yourself as MantraAIBot and briefly mention what you can do (chat and summarize YouTube videos)."
     try:
         response = await chat_session.send_message_async(welcome_instruction)
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Error in /start: {e}")
-        await update.message.reply_text(f"नमस्ते {user.first_name}! मैं MantraAIBot हूँ।")
+        await update.message.reply_text(f"नमस्ते {user.first_name}! 😎 मैं MantraAIBot हूँ।")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text
-    await context.bot.send_chat_action(update.effective_chat.id, 'typing')
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
         response = await chat_session.send_message_async(message_text)
