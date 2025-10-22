@@ -56,7 +56,7 @@ upcoming features:You will be able to convert many files into different formats 
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-2.5-flash',
     tools=AVAILABLE_TOOLS # Tool Manager se aane waali list
 )
 user_chats = {}
