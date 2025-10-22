@@ -40,7 +40,7 @@ genai.configure(api_key=GEMINI_KEY)
 # --- 2. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
-    tools=list(AVAILABLE_TOOLS.keys()) # Sirf naam bhejna
+    tools=list(AVAILABLE_TOOLS.values()) # Sirf naam bhejna
 )
 user_chats = {}
 
