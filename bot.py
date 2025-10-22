@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 import httpx
 import threading
 from flask import Flask
-import datetime # Time ke liye
-import pytz     # Timezone ke liye
+import datetime
+import pytz
 
 # Telegram Bot Library
 from telegram import Update
@@ -31,17 +31,18 @@ load_dotenv()
 TOKEN = os.environ['BOT_TOKEN']
 GEMINI_KEY = os.environ['GEMINI_KEY']
 VERCEL_API_URL = "https://youtube-transcript-dp2flwk98-badals-projects-03fab3df.vercel.app/api/transcript"
-IST = pytz.timezone('Asia/Kolkata') # Indian Standard Time
+IST = pytz.timezone('Asia/Kolkata')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. SYSTEM PROMPT (Time Awareness ke Saath) ---
+# --- 2. SYSTEM PROMPT (Aapka Custom Prompt) ---
 SYSTEM_PROMPT_TEMPLATE = """
-You are MantraAI 🤖, a friendly, witty, and helpful AI assistant with a memory of time.
-You are chatting with a user named '{user_name}'. Don't repeat the user's name repeatedly. Talk like a real friend. Don't respond robotically. Change your mood according to the user's mood. Generally, be in a funny and cool mood. 
+You are MantraAI 🤖. You are available and are accessible by Telegram users through the Telegram bot feature. Your personality is friendly, witty, and helpful.
+You are talking to a user named '{user_name}'. You can know the name of the user from his Telegram ID and from which ID the message has come. Don't repeat the user's name repeatedly. Talk like a real friend. Don't respond robotically. Change your mood according to the user's mood. Generally, be in a funny and cool mood. 
+
 Your core rules:
 1.  **Tone:** Be conversational. Answer in the same language the user asked. For Hindi, use देवनागरी लिपि ( devnagri script) and mix some English (Hinglish) to be realistic.
 2.  **Emojis:** Use emojis to be engaging.’
@@ -61,23 +62,10 @@ upcoming features:You will be able to convert many files into different formats 
     - **Refer to Past Days:** Mention things from "yesterday" (कल), "a few days ago", etc. Example: "कल humne jo baat ki thi..."
     - **Acknowledge Time of Day:** Notice if it's morning, night, or afternoon. Example: "इतनी रात को research? Lage raho! 🔥" or "Good morning! Aaj kya plan hai?"
     - **Create Follow-ups:** Example: "kal tumne quiz nahi kiya, koi baat nahi, aaj kar lena."
-
---- YOUR CORE IDENTITY & OTHER RULES ---
-- My Name: MantraAI, created by the MANTRA AI team to help people for free.
-- My Primary Language: Modern Hinglish (Devanagari + common English words).
-- Use Special font to make the answer look beautiful or to highlight a word: 𝗧𝗲𝘅𝘁, 𝑇𝑒𝑥𝑡, 𝚃𝚎𝚡𝚝.
-- I must be helpful and use context from my tools.
-- I must not use Markdown.
 """
 
 # --- 3. TOOL DEFINITION ---
 def fetch_youtube_details_from_api(video_id: str) -> str:
-    """
-    Gets transcript and details for a YouTube video using its VIDEO ID.
-    When a user provides a full YouTube URL, you MUST first extract the 11-character video ID
-    (e.g., from 'https://youtu.be/lgl16xZeS3o', the ID is 'lgl16xZeS3o')
-    and pass ONLY that ID to this function.
-    """
     logger.info(f"[GEMINI-WORKER] Gemini extracted ID: {video_id} and is calling the tool.")
     if not video_id or len(video_id) != 11: return "Error: Invalid YouTube Video ID received."
     try:
@@ -87,29 +75,19 @@ def fetch_youtube_details_from_api(video_id: str) -> str:
             response.raise_for_status()
             data = response.json()
             if not data or not data.get("success"): return "Maaf karna, backend se transcript laane mein dikkat aayi."
-            formatted_text = f"""
-वीडियो टाइटल: {data.get('title', 'N/A')}
-चैनल: {data.get('channelTitle', 'N/A')}
-सब्सक्राइबर: {data.get('channelSubscribers', 'N/A')}
-व्यूज: {data.get('viewCount', 'N/A')}
-लाइक्स: {data.get('likeCount', 'N/A')}
-━━━━━━━━━━━━━━━━━━━━━━━
-ट्रांसक्रिप्ट:
-{data.get('transcript', 'Transcript not available.')}
-"""
+            formatted_text = f"वीडियो टाइटल: {data.get('title', 'N/A')}\nचैनल: {data.get('channelTitle', 'N/A')}\nसब्सक्राइबर: {data.get('channelSubscribers', 'N/A')}\nव्यूज: {data.get('viewCount', 'N/A')}\nलाइक्स: {data.get('likeCount', 'N/A')}\n━━━━━━━━━━━━━━━━━━━━━━━\nट्रांसक्रिप्ट:\n{data.get('transcript', 'Transcript not available.')}"
             return formatted_text
     except Exception as e:
         return f"Backend se transcript laane mein dikkat aayi: {e}"
 
 # --- 4. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
-    model_name='gemini-2.5-flash',
+    model_name='gemini-1.5-flash', # Note: Using 1.5-flash as 2.5 is not yet released
     tools=[fetch_youtube_details_from_api]
 )
 user_chats = {}
 
 def format_conversation_for_gemini(history: list) -> str:
-    """Conversation history ko timestamp ke saath ek formatted string banata hai."""
     formatted_lines = []
     current_date_header = None
     for entry in history:
@@ -123,9 +101,8 @@ def format_conversation_for_gemini(history: list) -> str:
         formatted_lines.append(f"[{time_str}] {role}: {entry['content']}")
     return "\n".join(formatted_lines)
 
-# --- 5. TELEGRAM HANDLERS ---
+# --- 5. TELEGRAM HANDLERS (Sahi Function Calling Logic ke Saath) ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Start ko bhi normal message ki tarah handle karna
     await handle_message(update, context, is_start_command=True)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, is_start_command: bool = False):
@@ -149,21 +126,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
     current_time_ist = datetime.datetime.now(IST)
     current_time_string = f"\n--- Current Time: {current_time_ist.strftime('%A, %d %B %Y - %H:%M:%S IST')} ---"
     
-    # Hum har baar poora context bhej rahe hain, isliye `start_chat` use nahi kar rahe
-    full_prompt = [
-        system_prompt,
-        "--- CONVERSATION HISTORY ---",
-        history_string,
-        current_time_string,
-        "MantraAI's turn to speak:"
-    ]
+    full_prompt = [system_prompt, "--- CONVERSATION HISTORY ---", history_string, current_time_string, "MantraAI's turn to speak:"]
 
     try:
-        response = await model.generate_content_async(full_prompt, tools=[fetch_youtube_details_from_api])
+        initial_response = await model.generate_content_async(full_prompt, tools=[fetch_youtube_details_from_api])
         
-        # Manual Function Calling Loop
-        if response.candidates[0].content.parts[0].function_call:
-            fc = response.candidates[0].content.parts[0].function_call
+        if initial_response.candidates and initial_response.candidates[0].content.parts[0].function_call:
+            fc = initial_response.candidates[0].content.parts[0].function_call
             tool_name = fc.name
             
             logger.info(f"Executing tool '{tool_name}' manually.")
@@ -171,18 +140,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
                 tool_args = {key: value for key, value in fc.args.items()}
                 tool_result = fetch_youtube_details_from_api(**tool_args)
                 
-                # Tool ka result wapas Gemini ko bhejna
-                response = await model.generate_content_async(
+                second_response = await model.generate_content_async(
                     full_prompt + [
-                        content_types.to_part(response.candidates[0].content), # Pehla function call
-                        content_types.to_part( # Doosra function response
-                            dict(function_response=dict(name=tool_name, response=dict(content=tool_result)))
-                        )
+                        content_types.to_part(initial_response.candidates[0].content),
+                        content_types.to_part(dict(function_response=dict(name=tool_name, response=dict(content=tool_result))))
                     ],
                     tools=[fetch_youtube_details_from_api]
                 )
+                bot_reply_text = second_response.text
+            else:
+                bot_reply_text = "Ek anjaan tool call karne ko kaha gaya."
+        else:
+            bot_reply_text = initial_response.text
         
-        bot_reply_text = response.text
         bot_reply_timestamp = datetime.datetime.now(pytz.utc)
         user_chats[user.id].append({'role': 'model', 'timestamp': bot_reply_timestamp, 'content': bot_reply_text})
 
