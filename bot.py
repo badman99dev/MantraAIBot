@@ -11,10 +11,12 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 
 # Gemini AI Library
 import google.generativeai as genai
+from google.generativeai.types import content_types
 
 # APNI NAYI FILES IMPORT KARNA
 from prompts import SYSTEM_PROMPT_TEMPLATE
-from tools.tool_manager import AVAILABLE_TOOLS
+from tools.youtube_transcript import fetch_youtube_details_from_api
+from tools.quiz_tool import create_quiz_data
 import settings
 
 # --- 0. FLASK WEB SERVER SETUP ---
@@ -39,11 +41,10 @@ genai.configure(api_key=GEMINI_KEY)
 # --- 2. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
-    tools=AVAILABLE_TOOLS
+    tools=[fetch_youtube_details_from_api, create_quiz_data]
 )
-user_chats = {} # Conversation history
+user_chats = {} 
 
-# settings.py ko user data pass karna
 settings.load_user_profiles_settings(settings.user_profiles, user_chats)
 
 def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
@@ -65,10 +66,8 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             {'role': 'user', 'parts': [{'text': system_prompt}]},
             {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
         ]
-        user_chats[user_id] = model.start_chat(
-            history=initial_history,
-            enable_automatic_function_calling=True
-        )
+        # Ab 'enable_automatic_function_calling' nahi hai
+        user_chats[user_id] = model.start_chat(history=initial_history)
     return user_chats[user_id]
 
 # --- 3. TELEGRAM HANDLERS ---
@@ -84,7 +83,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in /start: {e}")
         await update.message.reply_text(f"नमस्ते {user.first_name}! 😎 मैं 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈 हूँ।")
 
-# YAHI HAI ASLI BADLAV
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text
@@ -101,39 +99,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
+        # Step 1: Pehla response get karna
         response = await chat_session.send_message_async(message_text)
         
-        # Step 1: Pehle check karo ki history mein aakhri message hai bhi ya nahi
-        if chat_session.history and len(chat_session.history) > 0:
-            last_message = chat_session.history[-1]
+        # Step 2: Check karna ki kya yeh tool call hai
+        if response.candidates and response.candidates[0].content.parts[0].function_call:
+            # YEH TOOL CALL HAI
+            fc = response.candidates[0].content.parts[0].function_call
+            tool_name = fc.name
+            tool_args = {key: value for key, value in fc.args.items()}
             
-            # Step 2: Ab "SAFE" tareeke se check karo ki kya yeh tool call ka result hai
-            if (last_message.role == 'model' and 
-                last_message.parts and 
-                hasattr(last_message.parts[0], 'function_response') and # YEH HAI ASLI FIX!
-                last_message.parts[0].function_response):
-                
-                tool_response = last_message.parts[0].function_response
-                
-                if tool_response.name == 'create_quiz':
-                    quiz_info = tool_response.response
-                    if quiz_info and quiz_info.get('type') == 'quiz':
-                        quiz_data = quiz_info.get('data')
-                        await context.bot.send_poll(
-                            chat_id=update.effective_chat.id,
-                            question=quiz_data["question"],
-                            options=quiz_data["options"],
-                            type='quiz',
-                            correct_option_id=quiz_data["correct_option_index"],
-                            explanation=quiz_data["explanation"]
-                        )
-                        return
-                    elif quiz_info and quiz_info.get('type') == 'error':
-                        await update.message.reply_text(quiz_info.get('data'))
-                        return
+            logger.info(f"Gemini requested tool '{tool_name}' with args: {tool_args}")
+            
+            # Har tool ko alag se handle karna
+            if tool_name == "fetch_youtube_details_from_api":
+                tool_result = fetch_youtube_details_from_api(**tool_args)
+            
+            elif tool_name == "create_quiz_data":
+                quiz_data = create_quiz_data(**tool_args)
+                if quiz_data:
+                    await context.bot.send_poll(
+                        chat_id=update.effective_chat.id,
+                        question=quiz_data["question"],
+                        options=quiz_data["options"],
+                        type='quiz',
+                        correct_option_id=quiz_data["correct_option_index"],
+                        explanation=quiz_data["explanation"]
+                    )
+                    tool_result = "Quiz successfully created and sent to the user."
+                else:
+                    tool_result = "Error: Could not create quiz data."
+            else:
+                tool_result = "Error: Unknown tool called."
 
-        # Agar upar kuch nahi hua, iska matlab yeh normal text ya YouTube summary hai
-        await update.message.reply_text(response.text)
+            # Step 3: Tool ka result wapas Gemini ko bhejna
+            second_response = await chat_session.send_message_async(
+                content_types.to_part(dict(function_response=dict(name=tool_name, response=dict(content=tool_result))))
+            )
+            bot_reply_text = second_response.text
+        else:
+            # YEH NORMAL TEXT HAI
+            bot_reply_text = response.text
+        
+        await update.message.reply_text(bot_reply_text)
 
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
