@@ -66,7 +66,6 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             {'role': 'user', 'parts': [{'text': system_prompt}]},
             {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
         ]
-        # Ab 'enable_automatic_function_calling' nahi hai
         user_chats[user_id] = model.start_chat(history=initial_history)
     return user_chats[user_id]
 
@@ -99,19 +98,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
-        # Step 1: Pehla response get karna
         response = await chat_session.send_message_async(message_text)
         
-        # Step 2: Check karna ki kya yeh tool call hai
-        if response.candidates and response.candidates[0].content.parts[0].function_call:
+        candidate = response.candidates[0]
+        # Sabse safe tareeka check karne ka
+        if (candidate.content and candidate.content.parts and 
+            hasattr(candidate.content.parts[0], 'function_call')):
+            
             # YEH TOOL CALL HAI
-            fc = response.candidates[0].content.parts[0].function_call
+            fc = candidate.content.parts[0].function_call
             tool_name = fc.name
             tool_args = {key: value for key, value in fc.args.items()}
             
             logger.info(f"Gemini requested tool '{tool_name}' with args: {tool_args}")
             
-            # Har tool ko alag se handle karna
             if tool_name == "fetch_youtube_details_from_api":
                 tool_result = fetch_youtube_details_from_api(**tool_args)
             
@@ -132,7 +132,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 tool_result = "Error: Unknown tool called."
 
-            # Step 3: Tool ka result wapas Gemini ko bhejna
             second_response = await chat_session.send_message_async(
                 content_types.to_part(dict(function_response=dict(name=tool_name, response=dict(content=tool_result))))
             )
@@ -155,7 +154,6 @@ def main():
                 profiles = json.load(f)
                 settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
-            logger.error("Could not load user profiles, file might be empty or corrupt.")
             settings.load_user_profiles_settings({}, user_chats)
 
     app = ApplicationBuilder().token(TOKEN).build()
@@ -175,7 +173,6 @@ if __name__ == "__main__":
                 profiles = json.load(f)
                 settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
-            logger.error("Could not load user profiles on startup.")
             settings.load_user_profiles_settings({}, user_chats)
 
     logger.info("🚀 Starting Flask server for Xylon AI in a separate thread...")
