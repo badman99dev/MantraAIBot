@@ -84,6 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in /start: {e}")
         await update.message.reply_text(f"नमस्ते {user.first_name}! 😎 मैं 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈 हूँ।")
 
+# YAHI HAI ASLI BADLAV
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text
@@ -100,38 +101,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
+        # Step 1: Library ko uska jaadu karne do
         response = await chat_session.send_message_async(message_text)
         
-        # YAHI HAI ASLI BADLAV
-        # Check karna ki kya tool ne koi special response bheja hai
-        if response.function_calls:
-            # Automatic function calling ne saara kaam kar diya hai,
-            # lekin humara quiz tool ek special dictionary return karta hai.
-            # Humein tool ke result ko check karna hoga.
-            # Note: The result of the function call is now in the chat history.
-            last_model_message = chat_session.history[-1]
-            if last_model_message.role == 'model' and last_model_message.parts[0].function_response:
-                tool_response = last_model_message.parts[0].function_response
-                
-                # Check karna ki kya yeh quiz ka response hai
-                if tool_response.name == 'create_quiz':
-                    quiz_info = tool_response.response
-                    if quiz_info and quiz_info.get('type') == 'quiz':
-                        quiz_data = quiz_info.get('data')
-                        await context.bot.send_poll(
-                            chat_id=update.effective_chat.id,
-                            question=quiz_data["question"],
-                            options=quiz_data["options"],
-                            type='quiz',
-                            correct_option_id=quiz_data["correct_option_index"],
-                            explanation=quiz_data["explanation"]
-                        )
-                        return # Quiz bhej diya, ab kuch nahi karna
-                    elif quiz_info and quiz_info.get('type') == 'error':
-                        await update.message.reply_text(quiz_info.get('data'))
-                        return
-
-        # Agar normal text ya YouTube summary hai, toh use bhej do
+        # Step 2: Ab history check karke pata lagao ki kya hua
+        last_message = chat_session.history[-1]
+        
+        # Check karo ki kya aakhri message ek tool ka result hai
+        if (last_message.role == 'model' and 
+            last_message.parts and 
+            last_message.parts[0].function_response):
+            
+            tool_response = last_message.parts[0].function_response
+            
+            # Check karo ki kya yeh quiz tool ka result hai
+            if tool_response.name == 'create_quiz':
+                quiz_info = tool_response.response
+                if quiz_info and quiz_info.get('type') == 'quiz':
+                    quiz_data = quiz_info.get('data')
+                    await context.bot.send_poll(
+                        chat_id=update.effective_chat.id,
+                        question=quiz_data["question"],
+                        options=quiz_data["options"],
+                        type='quiz',
+                        correct_option_id=quiz_data["correct_option_index"],
+                        explanation=quiz_data["explanation"]
+                    )
+                    return # Quiz bhej diya, ab kaam khatam
+                elif quiz_info and quiz_info.get('type') == 'error':
+                    await update.message.reply_text(quiz_info.get('data'))
+                    return # Error bhej diya, kaam khatam
+        
+        # Agar upar kuch nahi hua, iska matlab yeh normal text ya YouTube summary hai
         await update.message.reply_text(response.text)
 
     except Exception as e:
@@ -141,10 +142,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- 4. MAIN BOT EXECUTION ---
 def main():
     if os.path.exists(settings.USER_PROFILES_FILE):
-        with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
-            profiles = json.load(f)
-            settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
-    
+        try:
+            with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
+                profiles = json.load(f)
+                settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
+        except (json.JSONDecodeError, ValueError):
+            logger.error("Could not load user profiles, file might be empty or corrupt.")
+            settings.load_user_profiles_settings({}, user_chats)
+
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -157,10 +162,14 @@ def main():
 
 if __name__ == "__main__":
     if os.path.exists(settings.USER_PROFILES_FILE):
-        with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
-            profiles = json.load(f)
-            settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
-            
+        try:
+            with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
+                profiles = json.load(f)
+                settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
+        except (json.JSONDecodeError, ValueError):
+            logger.error("Could not load user profiles on startup.")
+            settings.load_user_profiles_settings({}, user_chats)
+
     logger.info("🚀 Starting Flask server for Xylon AI in a separate thread...")
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
