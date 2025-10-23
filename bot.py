@@ -29,7 +29,6 @@ def run_flask():
 load_dotenv()
 TOKEN = os.environ['BOT_TOKEN']
 GEMINI_KEY = os.environ['GEMINI_KEY']
-# NAYA: Model name ab environment se aayega
 MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
 
 logging.basicConfig(level=logging.INFO)
@@ -77,7 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
-    welcome_instruction = "Please greet me warmly as a new user. Introduce yourself as 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈 and briefly mention what you can do (chat and summarize YouTube videos)."
+    welcome_instruction = "Please greet me warmly as a new user. Introduce yourself as 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈 and briefly mention what you can do (chat and summarize YouTube videos, or create a quiz)."
     try:
         response = await chat_session.send_message_async(welcome_instruction)
         await update.message.reply_text(response.text)
@@ -102,14 +101,49 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
         response = await chat_session.send_message_async(message_text)
+        
+        # YAHI HAI ASLI BADLAV
+        # Check karna ki kya tool ne koi special response bheja hai
+        if response.function_calls:
+            # Automatic function calling ne saara kaam kar diya hai,
+            # lekin humara quiz tool ek special dictionary return karta hai.
+            # Humein tool ke result ko check karna hoga.
+            # Note: The result of the function call is now in the chat history.
+            last_model_message = chat_session.history[-1]
+            if last_model_message.role == 'model' and last_model_message.parts[0].function_response:
+                tool_response = last_model_message.parts[0].function_response
+                
+                # Check karna ki kya yeh quiz ka response hai
+                if tool_response.name == 'create_quiz':
+                    quiz_info = tool_response.response
+                    if quiz_info and quiz_info.get('type') == 'quiz':
+                        quiz_data = quiz_info.get('data')
+                        await context.bot.send_poll(
+                            chat_id=update.effective_chat.id,
+                            question=quiz_data["question"],
+                            options=quiz_data["options"],
+                            type='quiz',
+                            correct_option_id=quiz_data["correct_option_index"],
+                            explanation=quiz_data["explanation"]
+                        )
+                        return # Quiz bhej diya, ab kuch nahi karna
+                    elif quiz_info and quiz_info.get('type') == 'error':
+                        await update.message.reply_text(quiz_info.get('data'))
+                        return
+
+        # Agar normal text ya YouTube summary hai, toh use bhej do
         await update.message.reply_text(response.text)
+
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
         await update.message.reply_text("⚠️ माफ करना, कुछ तकनीकी दिक्कत आ गई ਹੈ।")
 
 # --- 4. MAIN BOT EXECUTION ---
 def main():
-    settings.load_user_profiles_settings(json.load(open(settings.USER_PROFILES_FILE)) if os.path.exists(settings.USER_PROFILES_FILE) else {}, user_chats)
+    if os.path.exists(settings.USER_PROFILES_FILE):
+        with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
+            profiles = json.load(f)
+            settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
     
     app = ApplicationBuilder().token(TOKEN).build()
     
@@ -122,8 +156,11 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    settings.load_user_profiles_settings(json.load(open(settings.USER_PROFILES_FILE)) if os.path.exists(settings.USER_PROFILES_FILE) else {}, user_chats)
-    
+    if os.path.exists(settings.USER_PROFILES_FILE):
+        with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
+            profiles = json.load(f)
+            settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
+            
     logger.info("🚀 Starting Flask server for Xylon AI in a separate thread...")
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
