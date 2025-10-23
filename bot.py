@@ -101,37 +101,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
-        # Step 1: Library ko uska jaadu karne do
         response = await chat_session.send_message_async(message_text)
         
-        # Step 2: Ab history check karke pata lagao ki kya hua
-        last_message = chat_session.history[-1]
-        
-        # Check karo ki kya aakhri message ek tool ka result hai
-        if (last_message.role == 'model' and 
-            last_message.parts and 
-            last_message.parts[0].function_response):
+        # Step 1: Pehle check karo ki history mein aakhri message hai bhi ya nahi
+        if chat_session.history and len(chat_session.history) > 0:
+            last_message = chat_session.history[-1]
             
-            tool_response = last_message.parts[0].function_response
-            
-            # Check karo ki kya yeh quiz tool ka result hai
-            if tool_response.name == 'create_quiz':
-                quiz_info = tool_response.response
-                if quiz_info and quiz_info.get('type') == 'quiz':
-                    quiz_data = quiz_info.get('data')
-                    await context.bot.send_poll(
-                        chat_id=update.effective_chat.id,
-                        question=quiz_data["question"],
-                        options=quiz_data["options"],
-                        type='quiz',
-                        correct_option_id=quiz_data["correct_option_index"],
-                        explanation=quiz_data["explanation"]
-                    )
-                    return # Quiz bhej diya, ab kaam khatam
-                elif quiz_info and quiz_info.get('type') == 'error':
-                    await update.message.reply_text(quiz_info.get('data'))
-                    return # Error bhej diya, kaam khatam
-        
+            # Step 2: Ab "SAFE" tareeke se check karo ki kya yeh tool call ka result hai
+            if (last_message.role == 'model' and 
+                last_message.parts and 
+                hasattr(last_message.parts[0], 'function_response') and # YEH HAI ASLI FIX!
+                last_message.parts[0].function_response):
+                
+                tool_response = last_message.parts[0].function_response
+                
+                if tool_response.name == 'create_quiz':
+                    quiz_info = tool_response.response
+                    if quiz_info and quiz_info.get('type') == 'quiz':
+                        quiz_data = quiz_info.get('data')
+                        await context.bot.send_poll(
+                            chat_id=update.effective_chat.id,
+                            question=quiz_data["question"],
+                            options=quiz_data["options"],
+                            type='quiz',
+                            correct_option_id=quiz_data["correct_option_index"],
+                            explanation=quiz_data["explanation"]
+                        )
+                        return
+                    elif quiz_info and quiz_info.get('type') == 'error':
+                        await update.message.reply_text(quiz_info.get('data'))
+                        return
+
         # Agar upar kuch nahi hua, iska matlab yeh normal text ya YouTube summary hai
         await update.message.reply_text(response.text)
 
