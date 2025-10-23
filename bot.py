@@ -2,6 +2,7 @@ import os
 import logging
 from dotenv import load_dotenv
 import threading
+import asyncio
 from flask import Flask
 import json
 
@@ -11,13 +12,16 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 
 # Gemini AI Library
 import google.generativeai as genai
-from google.generativeai.types import content_types
 
 # APNI NAYI FILES IMPORT KARNA
 from prompts import SYSTEM_PROMPT_TEMPLATE
-from tools.youtube_transcript import fetch_youtube_details_from_api
-from tools.quiz_tool import create_quiz_data
+from tools.tool_manager import AVAILABLE_TOOLS
 import settings
+
+# --- NEW: SECRET BRIDGE for Async Operations ---
+# Yeh ek "secret bridge" hai jo hamare synchronous tool ko
+# Telegram bot ke async functions tak pahunchne dega.
+THREAD_LOCALS = threading.local()
 
 # --- 0. FLASK WEB SERVER SETUP ---
 app_flask = Flask(__name__)
@@ -39,17 +43,13 @@ logger = logging.getLogger(__name__)
 genai.configure(api_key=GEMINI_KEY)
 
 # --- 2. GEMINI MODEL & CHAT MANAGEMENT ---
-# tool_manager.py se poori list import karna
-from tools.tool_manager import ALL_TOOLS
-
-# ...
-
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
-    tools=ALL_TOOLS # Ab yeh zyada saaf-suthra lag raha hai
+    tools=AVAILABLE_TOOLS
 )
-user_chats = {} 
+user_chats = {} # Conversation history
 
+# settings.py ko user data pass karna
 settings.load_user_profiles_settings(settings.user_profiles, user_chats)
 
 def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
@@ -71,21 +71,25 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             {'role': 'user', 'parts': [{'text': system_prompt}]},
             {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
         ]
-        user_chats[user_id] = model.start_chat(history=initial_history)
+        user_chats[user_id] = model.start_chat(
+            history=initial_history,
+            enable_automatic_function_calling=True
+        )
     return user_chats[user_id]
 
 # --- 3. TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-    chat_session = get_or_create_chat_session(user.id, user.first_name)
-    welcome_instruction = "Please greet me warmly as a new user. Introduce yourself as 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈 and briefly mention what you can do (chat and summarize YouTube videos, or create a quiz)."
-    try:
-        response = await chat_session.send_message_async(welcome_instruction)
-        await update.message.reply_text(response.text)
-    except Exception as e:
-        logger.error(f"Error in /start: {e}")
-        await update.message.reply_text(f"नमस्ते {user.first_name}! 😎 मैं 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈 हूँ।")
+    # Use handle_message to get a dynamic, AI-generated welcome
+    fake_update_for_start = type('FakeUpdate', (), {
+        'effective_user': user,
+        'message': type('FakeMessage', (), {
+            'text': "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, YouTube summaries, and quizzes."
+        })()
+    })
+    await handle_message(fake_update_for_start, context)
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -103,66 +107,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
+        # Step 1: Secret Bridge ko taiyaar karna
+        THREAD_LOCALS.context = context
+        THREAD_LOCALS.loop = asyncio.get_running_loop()
+
+        # Step 2: Automatic Function Calling ko uska jaadu karne dena
         response = await chat_session.send_message_async(message_text)
         
-        candidate = response.candidates[0]
-        # Sabse safe tareeka check karne ka
-        if (candidate.content and candidate.content.parts and 
-            hasattr(candidate.content.parts[0], 'function_call')):
-            
-            # YEH TOOL CALL HAI
-            fc = candidate.content.parts[0].function_call
-            tool_name = fc.name
-            tool_args = {key: value for key, value in fc.args.items()}
-            
-            logger.info(f"Gemini requested tool '{tool_name}' with args: {tool_args}")
-            
-            if tool_name == "fetch_youtube_details_from_api":
-                tool_result = fetch_youtube_details_from_api(**tool_args)
-            
-            elif tool_name == "create_quiz_data":
-                quiz_data = create_quiz_data(**tool_args)
-                if quiz_data:
-                    await context.bot.send_poll(
-                        chat_id=update.effective_chat.id,
-                        question=quiz_data["question"],
-                        options=quiz_data["options"],
-                        type='quiz',
-                        correct_option_id=quiz_data["correct_option_index"],
-                        explanation=quiz_data["explanation"]
-                    )
-                    tool_result = "Quiz successfully created and sent to the user."
-                else:
-                    tool_result = "Error: Could not create quiz data."
-            else:
-                tool_result = "Error: Unknown tool called."
-
-            second_response = await chat_session.send_message_async(
-                content_types.to_part(dict(function_response=dict(name=tool_name, response=dict(content=tool_result))))
-            )
-            bot_reply_text = second_response.text
-        else:
-            # YEH NORMAL TEXT HAI
-            bot_reply_text = response.text
-        
-        await update.message.reply_text(bot_reply_text)
+        # Step 3: Final jawab bhej dena (Library ne saara kaam kar diya hai)
+        # Agar quiz tool call hua hoga, toh woh background mein quiz bhej dega,
+        # aur yeh response.text Gemini ka final confirmation message hoga.
+        await update.message.reply_text(response.text)
 
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
         await update.message.reply_text("⚠️ माफ करना, कुछ तकनीकी दिक्कत आ गई ਹੈ।")
+    finally:
+        # Step 4: Secret Bridge ko saaf karna (bohot zaroori)
+        if hasattr(THREAD_LOCALS, 'context'):
+            del THREAD_LOCALS.context
+        if hasattr(THREAD_LOCALS, 'loop'):
+            del THREAD_LOCALS.loop
 
 # --- 4. MAIN BOT EXECUTION ---
 def main():
+    # Bot start hote hi purane user profiles ko load karna
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
                 profiles = json.load(f)
+                # JSON keys string hoti hain, unhe int mein convert karna
                 settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
+            logger.error("Could not load user profiles, file might be empty or corrupt.")
             settings.load_user_profiles_settings({}, user_chats)
 
     app = ApplicationBuilder().token(TOKEN).build()
     
+    # Saare handlers ko register karna
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setting", settings.settings_command))
     app.add_handler(CallbackQueryHandler(settings.settings_button_handler))
@@ -172,12 +154,14 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
+    # Script shuru hone par bhi profiles load karna
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
                 profiles = json.load(f)
                 settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
+            logger.error("Could not load user profiles on startup.")
             settings.load_user_profiles_settings({}, user_chats)
 
     logger.info("🚀 Starting Flask server for Xylon AI in a separate thread...")
