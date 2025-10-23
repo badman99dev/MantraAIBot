@@ -17,11 +17,9 @@ import google.generativeai as genai
 from prompts import SYSTEM_PROMPT_TEMPLATE
 from tools.tool_manager import AVAILABLE_TOOLS
 import settings
-
-# --- NEW: SECRET BRIDGE for Async Operations ---
-# Yeh ek "secret bridge" hai jo hamare synchronous tool ko
-# Telegram bot ke async functions tak pahunchne dega.
-THREAD_LOCALS = threading.local()
+# YAHI HAI ASLI BADLAV: Ab hum 'bot.py' mein THREAD_LOCALS define nahi karenge.
+# Use 'shared_data.py' se import karenge.
+from shared_data import THREAD_LOCALS 
 
 # --- 0. FLASK WEB SERVER SETUP ---
 app_flask = Flask(__name__)
@@ -81,14 +79,16 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-    # Use handle_message to get a dynamic, AI-generated welcome
-    fake_update_for_start = type('FakeUpdate', (), {
-        'effective_user': user,
-        'message': type('FakeMessage', (), {
-            'text': "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, YouTube summaries, and quizzes."
-        })()
-    })
-    await handle_message(fake_update_for_start, context)
+    
+    # handle_message ko call karke dynamic welcome message generate karwana
+    class FakeMessage:
+        text = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, YouTube summaries, and quizzes."
+    
+    class FakeUpdate:
+        effective_user = user
+        message = FakeMessage()
+
+    await handle_message(FakeUpdate(), context)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -101,7 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         settings.user_profiles[user.id][state] = message_text
         settings.save_user_profiles()
         await update.message.reply_text(f"✅ Theek hai, maine aapka '{state}' save kar liya hai! Main isse agle conversation se yaad rakhoonga.")
-        if user.id in user_chats: del user_chats[user_id]
+        if user.id in user_chats: del user_chats[user.id]
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
@@ -114,9 +114,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Step 2: Automatic Function Calling ko uska jaadu karne dena
         response = await chat_session.send_message_async(message_text)
         
-        # Step 3: Final jawab bhej dena (Library ne saara kaam kar diya hai)
-        # Agar quiz tool call hua hoga, toh woh background mein quiz bhej dega,
-        # aur yeh response.text Gemini ka final confirmation message hoga.
+        # Step 3: Final jawab bhej dena
         await update.message.reply_text(response.text)
 
     except Exception as e:
@@ -136,7 +134,6 @@ def main():
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
                 profiles = json.load(f)
-                # JSON keys string hoti hain, unhe int mein convert karna
                 settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
             logger.error("Could not load user profiles, file might be empty or corrupt.")
