@@ -39,9 +39,14 @@ logger = logging.getLogger(__name__)
 genai.configure(api_key=GEMINI_KEY)
 
 # --- 2. GEMINI MODEL & CHAT MANAGEMENT ---
+# tool_manager.py se poori list import karna
+from tools.tool_manager import ALL_TOOLS
+
+# ...
+
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
-    tools=[fetch_youtube_details_from_api, create_quiz_data]
+    tools=ALL_TOOLS # Ab yeh zyada saaf-suthra lag raha hai
 )
 user_chats = {} 
 
