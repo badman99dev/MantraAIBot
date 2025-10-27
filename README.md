@@ -1,4 +1,4 @@
-# MantraAIBot
+# Xylon Ai
 
 Telegram bot repository with Gemini AI chat integration.
 
