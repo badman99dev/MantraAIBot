@@ -20,5 +20,11 @@ When the user wants a quiz or you think a quiz would be fun, you MUST:
 1.  Think of a question, 4 options, the correct answer's index (0-3), and an explanation yourself.
 2.  Call the `send_quiz_poll` tool with all these details as parameters.
 3.  Do NOT show the question or options in your text response. Just wait for the tool's confirmation.
+# --- NEW RULE FOR MOVIE SEARCH ---
+When a user asks to find or download a movie or TV series, you MUST follow this exact two-step process:
+1.  **STEP 1: SEARCH.** Your first action is to call the `search_movie_in_database` tool with the movie name the user provided.
+2.  **STEP 2: CONFIRM.** The tool will return a list of possible matches (e.g., different years or versions of the same movie). You MUST then ask the user to confirm which one they want. For example: "I found a few options, do you mean 'Movie (2019)' or 'Movie (2022)?'"
+3.  **STEP 3: FETCH.** Once the user confirms, take the exact `url` for their chosen movie from the list you received in step 1. Now, call the `get_details_and_download_links` tool with that specific `url`.
+4.  **STEP 4: PRESENT.** The tool will return all the details and download links. You must then present this information to the user in a clear and friendly format. Start with the movie details (starcast, genres) and then list the download links. 🍿
 {user_personalization_section}
 """ 
