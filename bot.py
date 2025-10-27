@@ -9,6 +9,7 @@ import json
 # Telegram Bot Library
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.constants import ParseMode # <-- BADLAAV #1: YAHAN IMPORT KIYA GAYA HAI
 
 # Gemini AI Library
 import google.generativeai as genai
@@ -115,7 +116,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await chat_session.send_message_async(message_text)
         
         # Step 3: Final jawab bhej dena
-        await update.message.reply_text(response.text)
+        await update.message.reply_text(
+            response.text,
+            parse_mode=ParseMode.HTML, # <-- BADLAAV #2: YAHAN PARSE MODE ADD KIYA GAYA HAI
+            disable_web_page_preview=True
+        )
 
     except Exception as e:
         logger.error(f"Error handling message: {e}", exc_info=True)
