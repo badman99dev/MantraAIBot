@@ -80,24 +80,37 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
 # --- 3. TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action='typing')
     
-    class FakeMessage:
-        text = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
-    
-    class FakeUpdate:
-        effective_user = user
-        message = FakeMessage()
-
-    await handle_message(FakeUpdate(), context)
+    # We use a try-except block here to be extra safe during the first interaction
+    try:
+        # Get a clean chat session
+        chat_session = get_or_create_chat_session(user.id, user.first_name)
+        
+        # Directly send the welcome prompt to Gemini
+        welcome_prompt = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
+        response = await chat_session.send_message_async(welcome_prompt)
+        
+        # Send the response to the user
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=response.text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🤯 Whoops! Bot ko start karne mein ek error aa gaya hai.\n\n`{type(e).__name__}: {e}`"
+        )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text
     
-    # === THE CRITICAL TRY-EXCEPT BLOCK ===
-    # Yeh poore function ko cover karega
     try:
         if 'next_message_is' in context.user_data:
             state = context.user_data.pop('next_message_is')
@@ -124,13 +137,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception as e:
-        # YEH HAI SABSE IMPORTANT CHANGE
-        # Ab error chup nahi rahega.
         logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
-        # User ko bhi ek clear message jayega.
         await update.message.reply_text(f"🤯 Whoops! Ek unexpected error aa gaya hai.\n\n`{type(e).__name__}: {e}`\n\nI've logged the details. Please try a different command.")
     finally:
-        # Secret Bridge ko saaf karna
         if hasattr(THREAD_LOCALS, 'context'):
             del THREAD_LOCALS.context
         if hasattr(THREAD_LOCALS, 'loop'):
