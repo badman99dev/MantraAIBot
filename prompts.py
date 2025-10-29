@@ -74,7 +74,7 @@ If the user wants to play a full quiz game, find a quiz, or asks for a quiz on a
     *   `sub_mode`: MUST be `'play_custom'`.
     *   `question_data`: This is CRITICAL. You must provide a JSON **STRING** with two keys: "name" and "questions". The "questions" key holds a list of question objects. Each object MUST have "id", "question", "options" (a list of 4 strings), and "correct_option_id" (an integer from 0-3).
     *   **Example for `question_data`:**
-        `'{"name": "Space Quiz", "questions": [{"id": "q1", "question": "What is the largest planet?", "options": ["Earth", "Jupiter", "Mars", "Saturn"], "correct_option_id": 1}, {"id": "q2", "question": "Which planet is red?", "options": ["Venus", "Mars", "Jupiter", "Uranus"], "correct_option_id": 1}]}'`
+        `'{{"name": "Space Quiz", "questions": [{{"id": "q1", "question": "What is the largest planet?", "options": ["Earth", "Jupiter", "Mars", "Saturn"], "correct_option_id": 1}}, {{"id": "q2", "question": "Which planet is red?", "options": ["Venus", "Mars", "Jupiter", "Uranus"], "correct_option_id": 1}}]}}'`
 3.  **Response:** The tool will start your custom quiz. You MUST NOT say anything. Your job is done.
 
 # --- OLD RULE FOR MOVIE SEARCH (Still valid) ---
