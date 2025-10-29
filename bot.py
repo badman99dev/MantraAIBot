@@ -8,19 +8,22 @@ import json
 
 # Telegram Bot Library
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-from telegram.constants import ParseMode # <-- BADLAAV #1: YAHAN IMPORT KIYA GAYA HAI
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, PollAnswerHandler # <-- NAYE HANDLERS
+from telegram.constants import ParseMode
 
 # Gemini AI Library
 import google.generativeai as genai
 
-# APNI NAYI FILES IMPORT KARNA
+# APNI FILES IMPORT KARNA
 from prompts import SYSTEM_PROMPT_TEMPLATE
 from tools.tool_manager import AVAILABLE_TOOLS
 import settings
-# YAHI HAI ASLI BADLAV: Ab hum 'bot.py' mein THREAD_LOCALS define nahi karenge.
-# Use 'shared_data.py' se import karenge.
 from shared_data import THREAD_LOCALS 
+
+# === QUIZ GAME IMPORTS START ===
+# Naye quiz game ke handlers ko import karna
+from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
+# === QUIZ GAME IMPORTS END ===
 
 # --- 0. FLASK WEB SERVER SETUP ---
 app_flask = Flask(__name__)
@@ -46,9 +49,8 @@ model = genai.GenerativeModel(
     model_name=MODEL_NAME,
     tools=AVAILABLE_TOOLS
 )
-user_chats = {} # Conversation history
+user_chats = {} 
 
-# settings.py ko user data pass karna
 settings.load_user_profiles_settings(settings.user_profiles, user_chats)
 
 def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
@@ -81,9 +83,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    # handle_message ko call karke dynamic welcome message generate karwana
     class FakeMessage:
-        text = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, YouTube summaries, and quizzes."
+        text = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
     
     class FakeUpdate:
         effective_user = user
@@ -108,17 +109,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     chat_session = get_or_create_chat_session(user.id, user.first_name)
     try:
-        # Step 1: Secret Bridge ko taiyaar karna
         THREAD_LOCALS.context = context
         THREAD_LOCALS.loop = asyncio.get_running_loop()
+        # === NAYA BADLAAV: UPDATE OBJECT KO BHI PASS KARNA ===
+        # Yeh quiz tool ko 'update.message' access karne dega
+        THREAD_LOCALS.context.update = update
 
-        # Step 2: Automatic Function Calling ko uska jaadu karne dena
         response = await chat_session.send_message_async(message_text)
         
-        # Step 3: Final jawab bhej dena
         await update.message.reply_text(
             response.text,
-            parse_mode=ParseMode.HTML, # <-- BADLAAV #2: YAHAN PARSE MODE ADD KIYA GAYA HAI
+            parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
 
@@ -126,7 +127,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error handling message: {e}", exc_info=True)
         await update.message.reply_text("⚠️ माफ करना, कुछ तकनीकी दिक्कत आ गई ਹੈ।")
     finally:
-        # Step 4: Secret Bridge ko saaf karna (bohot zaroori)
+        # Secret Bridge ko saaf karna
         if hasattr(THREAD_LOCALS, 'context'):
             del THREAD_LOCALS.context
         if hasattr(THREAD_LOCALS, 'loop'):
@@ -134,7 +135,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 4. MAIN BOT EXECUTION ---
 def main():
-    # Bot start hote hi purane user profiles ko load karna
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
@@ -144,19 +144,30 @@ def main():
             logger.error("Could not load user profiles, file might be empty or corrupt.")
             settings.load_user_profiles_settings({}, user_chats)
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    # === NAYA BADLAAV: JOB QUEUE INITIALIZE KARNA ===
+    # Quiz game ke timers ke liye JobQueue zaroori hai
+    job_queue = JobQueue()
+    app = ApplicationBuilder().token(TOKEN).job_queue(job_queue).build()
     
     # Saare handlers ko register karna
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setting", settings.settings_command))
-    app.add_handler(CallbackQueryHandler(settings.settings_button_handler))
+    # Settings ke buttons abhi bhi kaam karenge
+    app.add_handler(CallbackQueryHandler(settings.settings_button_handler, pattern='^settings_'))
+    
+    # === NAYE QUIZ GAME HANDLERS ===
+    # Yeh handlers sirf tab kaam karenge jab callback_data 'quizgame_' se shuru hoga
+    app.add_handler(CallbackQueryHandler(quiz_game_button_handler, pattern='^quizgame_'))
+    # Yeh handler quiz game ke dauraan poll answers ko pakdega
+    app.add_handler(PollAnswerHandler(quiz_game_poll_answer_handler))
+    
+    # Message handler ko sabse aakhir mein rakha hai
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info(f"🚀 Xylon AI Bot is starting polling with model: {MODEL_NAME}")
     app.run_polling()
 
 if __name__ == "__main__":
-    # Script shuru hone par bhi profiles load karna
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
