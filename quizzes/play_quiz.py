@@ -12,8 +12,7 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 # Import project-specific modules from the quizzes directory
-from .quiz_manager import get_question_by_id_from_data
-from .user_quiz_data import format_detailed_review
+from .user_quiz_data import format_detailed_review, get_question_by_id_from_data # <-- THE FIX IS HERE
 
 logger = logging.getLogger(__name__)
 
