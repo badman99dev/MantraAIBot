@@ -62,7 +62,6 @@ def manage_quiz(
         context = THREAD_LOCALS.context
         loop = THREAD_LOCALS.loop
         chat_id = context._chat_id
-        update = context.update
     except AttributeError:
         return "Error: Could not get the necessary context to run the tool. This is an internal issue."
 
@@ -83,7 +82,6 @@ def manage_quiz(
             all_sets = get_all_sets()
             if not all_sets:
                 return "No quiz sets were found in the database. Inform the user about this."
-            # Format the list for the AI to present beautifully
             formatted_list = [f"- <b>{data['name']}</b> (ID: <code>{set_id}</code>)" for set_id, data in all_sets.items()]
             return "Here is a list of available quiz sets. Present this list to the user and ask them which one they'd like to play:\n" + "\n".join(formatted_list)
 
@@ -91,9 +89,8 @@ def manage_quiz(
             if not set_id:
                 return "Error: To play a quiz set, you must provide the 'set_id'."
             
-            # Start the game asynchronously
             asyncio.run_coroutine_threadsafe(
-                start_quiz_game(context, chat_id, set_id, update.message, is_temp_quiz=False),
+                start_quiz_game(context, chat_id, set_id, is_temp_quiz=False),
                 loop
             )
             return "The multi-question quiz game is starting now. You don't need to say anything else."
@@ -103,14 +100,12 @@ def manage_quiz(
                 return "Error: For 'play_custom' sub_mode, you must provide the 'question_data' as a JSON string."
             
             try:
-                # Use a unique ID for the temporary quiz
                 custom_set_id = f"custom_{chat_id}_{int(time.time())}"
                 data = json.loads(question_data)
                 save_custom_quiz_set(context, custom_set_id, data)
                 
-                # Start the game asynchronously
                 asyncio.run_coroutine_threadsafe(
-                    start_quiz_game(context, chat_id, custom_set_id, update.message, is_temp_quiz=True),
+                    start_quiz_game(context, chat_id, custom_set_id, is_temp_quiz=True),
                     loop
                 )
                 return "The custom multi-question quiz you created is starting now. You don't need to say anything else."
@@ -126,6 +121,5 @@ def manage_quiz(
     else:
         return f"Error: Invalid 'mode' ('{mode}') provided. Use 'single_question' or 'multi_question'."
 
-# --- We must now replace the old tool with the new one ---
-# In tool_manager.py, the old 'send_quiz_poll' will be replaced by 'manage_quiz'
-send_quiz_poll = manage_quiz # Keep old name for compatibility in tool_manager for now
+# Keep old name for compatibility in tool_manager for now
+send_quiz_poll = manage_quiz
