@@ -20,45 +20,66 @@ async def start_quiz_game(context: ContextTypes.DEFAULT_TYPE, chat_id: int, set_
     """
     Creates and starts a new quiz game session. This is called by the quiz_tool.
     """
-    if is_temp_quiz:
-        quiz_data = get_custom_quiz_set(context, set_id)
-    else:
-        quiz_data = get_quiz_set(set_id)
+    # <-- DEBUG LOG 1: Check if the function even starts
+    logger.info(f"[QUIZ GAME RUNNER] Spies deployed! `start_quiz_game` called for chat_id: {chat_id} with set_id: {set_id}")
+
+    try:
+        if is_temp_quiz:
+            quiz_data = get_custom_quiz_set(context, set_id)
+        else:
+            quiz_data = get_quiz_set(set_id)
         
-    if not quiz_data:
+        # <-- DEBUG LOG 2: Check if we found the quiz data
+        logger.info(f"[QUIZ GAME RUNNER] Quiz data fetched for set_id: {set_id}. Data found: {'Yes' if quiz_data else 'No'}")
+
+        if not quiz_data:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_to_edit.message_id,
+                text="<b>Error:</b> Requested quiz is not available.", 
+                parse_mode='HTML'
+            )
+            return
+        
+        # Clean up previous session if any, to avoid conflicts
+        if 'active_quiz_sessions' in context.bot_data and chat_id in context.bot_data['active_quiz_sessions']:
+            logger.warning(f"[QUIZ GAME RUNNER] An old quiz session was found for chat {chat_id}. Terminating it.")
+            old_session = context.bot_data['active_quiz_sessions'].pop(chat_id)
+            if not old_session.is_suspended:
+                await old_session.suspend_quiz()
+
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_to_edit.message_id,
-            text="<b>Error:</b> Requested quiz is not available.", 
+            text=f"🚀 Getting the '<b>{escape(quiz_data['name'])}</b>' quiz ready...", 
             parse_mode='HTML'
         )
-        return
-    
-    # Clean up previous session if any, to avoid conflicts
-    if 'active_quiz_sessions' in context.bot_data and chat_id in context.bot_data['active_quiz_sessions']:
-        old_session = context.bot_data['active_quiz_sessions'].pop(chat_id)
-        if not old_session.is_suspended:
-            await old_session.suspend_quiz() # Gracefully end the old one
+        
+        # <-- DEBUG LOG 3: Check right before creating the session
+        logger.info(f"[QUIZ GAME RUNNER] All checks passed. Creating QuizSession object now.")
+        
+        session = QuizSession(context, chat_id, set_id, quiz_data, is_temp_quiz)
+        
+        if 'active_quiz_sessions' not in context.bot_data:
+            context.bot_data['active_quiz_sessions'] = {}
+        context.bot_data['active_quiz_sessions'][chat_id] = session
+        
+        # <-- DEBUG LOG 4: Check right before starting the session
+        logger.info(f"[QUIZ GAME RUNNER] Session created. Calling session.start()... The countdown should begin now.")
+        await session.start()
 
-    await context.bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_to_edit.message_id,
-        text=f"🚀 Getting the '<b>{escape(quiz_data['name'])}</b>' quiz ready...", 
-        parse_mode='HTML'
-    )
-    
-    # Create and start a new game session
-    session = QuizSession(context, chat_id, set_id, quiz_data, is_temp_quiz)
-    
-    if 'active_quiz_sessions' not in context.bot_data:
-        context.bot_data['active_quiz_sessions'] = {}
-    context.bot_data['active_quiz_sessions'][chat_id] = session
-    
-    await session.start()
+    except Exception as e:
+        # <-- DEBUG LOG 5: This is the most important spy. It will catch any hidden error.
+        logger.error(f"[QUIZ GAME RUNNER] FATAL ERROR inside `start_quiz_game`: {e}", exc_info=True)
+        # Inform the user that something went wrong backstage
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🤯 Whoops! Quiz shuru karne mein parde ke peeche ek error aa gaya.\n\n`{type(e).__name__}: {e}`\n\nI've logged the details."
+        )
 
 
 # --- Handlers for User Interactions During the Game ---
-
+# (The rest of the file remains the same)
 async def quiz_game_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all button clicks during a quiz game."""
     query = update.callback_query
@@ -70,7 +91,10 @@ async def quiz_game_button_handler(update: Update, context: ContextTypes.DEFAULT
     session = active_sessions.get(chat_id)
 
     if not session:
-        await query.edit_message_text("This quiz session has expired. Please start a new one.")
+        try:
+            await query.edit_message_text("This quiz session has expired. Please start a new one.")
+        except BadRequest:
+            pass # Message might have been deleted already
         return
 
     if action == 'quizgame_try_again':
@@ -80,7 +104,6 @@ async def quiz_game_button_handler(update: Update, context: ContextTypes.DEFAULT
             await query.message.delete()
         except BadRequest: 
             pass
-        # We can't use the original 'message_to_edit' so we send a new one to start
         new_msg = await context.bot.send_message(chat_id, "Restarting quiz...")
         await start_quiz_game(context, chat_id, set_id, new_msg, is_temp)
 
@@ -120,7 +143,6 @@ async def quiz_game_poll_answer_handler(update: Update, context: ContextTypes.DE
         session = context.bot_data[poll_id]['session']
         await session.handle_answer(update)
         
-        # If the quiz is over, remove the session
-        if session.is_suspended: # The session ends itself
+        if session.is_suspended:
             active_sessions = context.bot_data.get('active_quiz_sessions', {})
             active_sessions.pop(session.chat_id, None)
