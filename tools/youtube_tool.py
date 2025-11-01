@@ -9,7 +9,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Apne .env file se Vercel API ka URL lega
-YOUTUBE_API_URL = os.environ.get("YOUTUBE_API_URL")
+YOUTUBE_API_URL = "https://youtube-transcript-7amzt4ya7-badals-projects-03fab3df.vercel.app"
 
 def youtube_tool(mode: str, query: Optional[str] = None, video_id: Optional[str] = None) -> str:
     """
