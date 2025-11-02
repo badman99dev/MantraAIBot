@@ -1,7 +1,6 @@
 # gemini_manager.py
 import os
 import logging
-import threading
 import google.generativeai as genai
 
 from prompts import SYSTEM_PROMPT_TEMPLATE
@@ -11,50 +10,23 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# --- DYNAMIC API KEY & MODEL POOL SETUP ---
-try:
-    TOTAL_KEYS = int(os.environ.get("TOTAL_GEMINI_KEYS", 0))
-    if TOTAL_KEYS == 0:
-        logger.warning("TOTAL_GEMINI_KEYS environment variable not set or is 0. Attempting to find keys manually.")
-except ValueError:
-    raise ValueError("TOTAL_GEMINI_KEYS must be a valid number.")
+# --- SIMPLE, DIRECT API KEY SETUP ---
+API_KEY = os.environ.get("GEMINI_API_KEY")
+if not API_KEY:
+    raise ValueError("FATAL ERROR: GEMINI_API_KEY environment variable not found. The bot cannot start. Please set it in your Render dashboard.")
 
-API_KEYS = []
-if TOTAL_KEYS > 0:
-    for i in range(1, TOTAL_KEYS + 1):
-        key = os.environ.get(f"GEMINI_KEY_{i}")
-        if key:
-            API_KEYS.append(key)
-        else:
-            logger.warning(f"Configuration warning: TOTAL_GEMINI_KEYS is {TOTAL_KEYS}, but GEMINI_KEY_{i} is missing.")
-else:
-    # Fallback for old single key system, makes it backward compatible
-    single_key = os.environ.get("GEMINI_KEYS") or os.environ.get("GEMINI_KEY")
-    if single_key:
-        API_KEYS.append(single_key)
-
-if not API_KEYS:
-    raise ValueError("FATAL ERROR: No Gemini API keys were found. Please set TOTAL_GEMINI_KEYS and GEMINI_KEY_n variables.")
+# Configure the genai library with the single key
+genai.configure(api_key=API_KEY)
 
 MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
 
-MODEL_POOL = []
-for key in API_KEYS:
-    genai.configure(api_key=key)
+# Create a single, shared model instance
+try:
     model = genai.GenerativeModel(model_name=MODEL_NAME, tools=AVAILABLE_TOOLS)
-    MODEL_POOL.append(model)
-    logger.info(f"Successfully initialized a model instance for key ending with '...{key[-4:]}'")
-
-current_model_index = 0
-model_lock = threading.Lock()
-
-def get_next_model() -> genai.GenerativeModel:
-    """Safely gets the next model from the pool in a round-robin fashion."""
-    global current_model_index
-    with model_lock:
-        model = MODEL_POOL[current_model_index]
-        current_model_index = (current_model_index + 1) % len(MODEL_POOL)
-        return model
+    logger.info(f"Successfully initialized a single model instance with the provided API key ending in '...{API_KEY[-4:]}'")
+except Exception as e:
+    logger.critical(f"Failed to initialize the GenerativeModel. Error: {e}")
+    raise e
 
 # --- CHAT SESSION & HISTORY MANAGEMENT ---
 user_chats = {} 
@@ -63,7 +35,6 @@ settings.load_user_profiles_settings(settings.user_profiles, user_chats)
 async def manage_chat_history(chat_session: genai.ChatSession):
     """Checks the chat history's token count and trims it if it exceeds the limit."""
     try:
-        model = chat_session.model
         token_count = (await model.count_tokens_async(chat_session.history)).total_tokens
         
         if token_count > config.MAX_HISTORY_TOKENS:
@@ -85,11 +56,9 @@ async def manage_chat_history(chat_session: genai.ChatSession):
         logger.error(f"Error during chat history management: {e}", exc_info=True)
 
 def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
-    """Gets an existing chat session or creates a new one with a model from the pool."""
+    """Gets an existing chat session or creates a new one using the single model instance."""
     if user_id not in user_chats:
-        logger.info(f"Creating new chat session for user {user_id}...")
-        selected_model = get_next_model()
-        logger.info(f"Assigned model with key '...{selected_model._client._api_key[-4:]}' to user {user_id}")
+        logger.info(f"Creating new chat session for user {user_id} using the single model instance.")
         
         personalization_section = ""
         if user_id in settings.user_profiles and settings.user_profiles[user_id]:
@@ -108,7 +77,8 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             {'role': 'user', 'parts': [{'text': system_prompt}]},
             {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
         ]
-        user_chats[user_id] = selected_model.start_chat(
+        # Start the chat using the single, globally defined model
+        user_chats[user_id] = model.start_chat(
             history=initial_history,
             enable_automatic_function_calling=True
         )
