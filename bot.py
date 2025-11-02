@@ -5,7 +5,6 @@ import threading
 import asyncio
 from flask import Flask
 import json
-from typing import AsyncGenerator
 
 # Telegram Bot Library
 from telegram import Update
@@ -14,7 +13,6 @@ from telegram.constants import ParseMode
 
 # Gemini AI Library
 import google.generativeai as genai
-from google.generativeai.types import GenerateContentResponse
 
 # APNI FILES IMPORT KARNA
 from prompts import SYSTEM_PROMPT_TEMPLATE
@@ -106,56 +104,50 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
         ]
         user_chats[user_id] = model.start_chat(
             history=initial_history,
-            enable_automatic_function_calling=True
+            enable_automatic_function_calling=True # This needs to be TRUE for tools
         )
     return user_chats[user_id]
 
-# --- 4. SMART MESSAGE SENDING & SPLITTING FUNCTION ---
-async def send_split_message(update: Update, context: ContextTypes.DEFAULT_TYPE, response_stream: AsyncGenerator[GenerateContentResponse, None]):
-    current_chunk_text = ""
+# +++ NEW: FUNCTION TO SPLIT A COMPLETE STRING +++
+async def split_and_send_string(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """
+    Takes a complete text string, splits it into intelligent chunks, and sends them to the user.
+    """
+    if not text:
+        return
+
+    remaining_text = text
     split_chars = ['.', '।', '?', '!', '\n']
 
-    async for chunk in response_stream:
-        # IMPORTANT: This check ensures we only process text meant for the user.
-        # Tool calls (function_call) do not have a .text attribute and are ignored here.
-        if not hasattr(chunk, 'text') or not chunk.text:
-            continue
-            
-        current_chunk_text += chunk.text
-        
-        should_split = False
+    while len(remaining_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
         split_pos = -1
-
+        
         # Rule 1: Sentence-level split
-        if len(current_chunk_text) > SENTENCE_SPLIT_THRESHOLD:
-            for i in range(len(current_chunk_text) - 1, SENTENCE_SPLIT_THRESHOLD, -1):
-                if current_chunk_text[i] in split_chars:
-                    split_pos = i + 1; should_split = True; break
+        for i in range(SENTENCE_SPLIT_THRESHOLD, 0, -1):
+            if remaining_text[i] in split_chars:
+                split_pos = i + 1; break
         
         # Rule 2: Word-level split
-        if not should_split and len(current_chunk_text) > WORD_SPLIT_THRESHOLD:
-            pos = current_chunk_text.rfind(' ', 0, WORD_SPLIT_THRESHOLD)
-            if pos != -1: split_pos = pos + 1; should_split = True
+        if split_pos == -1 and len(remaining_text) > WORD_SPLIT_THRESHOLD:
+            pos = remaining_text.rfind(' ', 0, WORD_SPLIT_THRESHOLD)
+            if pos != -1: split_pos = pos + 1
 
-        # Rule 3: Character-level split (Hard limit)
-        if not should_split and len(current_chunk_text) > CHARACTER_SPLIT_THRESHOLD:
-            split_pos = CHARACTER_SPLIT_THRESHOLD; should_split = True
+        # Rule 3: Character-level split
+        if split_pos == -1:
+            split_pos = CHARACTER_SPLIT_THRESHOLD
 
-        if should_split:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id, text=current_chunk_text[:split_pos],
-                parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
-            current_chunk_text = current_chunk_text[split_pos:]
-            await asyncio.sleep(0.5)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=remaining_text[:split_pos],
+            parse_mode=ParseMode.HTML, disable_web_page_preview=True
+        )
+        remaining_text = remaining_text[split_pos:]
+        await asyncio.sleep(0.5)
 
-    if current_chunk_text:
-        # Final check to prevent sending a message that is still too long
-        if len(current_chunk_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
-            for i in range(0, len(current_chunk_text), TELEGRAM_MAX_MESSAGE_LENGTH):
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=current_chunk_text[i:i+TELEGRAM_MAX_MESSAGE_LENGTH], parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        else:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=current_chunk_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    if remaining_text:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=remaining_text,
+            parse_mode=ParseMode.HTML, disable_web_page_preview=True
+        )
 
 # --- 5. TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,11 +156,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
         chat_session = get_or_create_chat_session(user.id, user.first_name)
-        response_stream = await chat_session.send_message_async(
-            "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes.",
-            stream=True
+        
+        # --- MODIFIED: NO STREAMING ---
+        response = await chat_session.send_message_async(
+            "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         )
-        await send_split_message(update, context, response_stream)
+        
+        # +++ NEW: Use the string splitter function +++
+        await split_and_send_string(update, context, response.text)
+
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text="🤯 Oops! Failed to generate response. Please try after some time.")
@@ -195,8 +191,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         THREAD_LOCALS.loop = asyncio.get_running_loop()
         THREAD_LOCALS.context.update = update
 
-        response_stream = await chat_session.send_message_async(message_text, stream=True)
-        await send_split_message(update, context, response_stream)
+        # --- MODIFIED: NO STREAMING ---
+        response = await chat_session.send_message_async(message_text) # stream=True hata diya hai
+        
+        # +++ NEW: Use the string splitter function +++
+        await split_and_send_string(update, context, response.text)
         
     except Exception as e:
         logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
