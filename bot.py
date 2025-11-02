@@ -19,6 +19,7 @@ from prompts import SYSTEM_PROMPT_TEMPLATE
 from tools.tool_manager import AVAILABLE_TOOLS
 import settings
 from shared_data import THREAD_LOCALS 
+from time_utils import get_current_ist_string # +++ YEH NAYI LINE ADD KARNI HAI +++
 
 # === QUIZ GAME IMPORTS START ===
 from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
@@ -96,6 +97,7 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             user_name=user_name,
+            current_ist_time_string=get_current_ist_string(), # +++ YAHAN PAR NAYA PARAMETER ADD KARNA HAI +++
             user_personalization_section=personalization_section
         )
         initial_history = [
