@@ -104,15 +104,12 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
         ]
         user_chats[user_id] = model.start_chat(
             history=initial_history,
-            enable_automatic_function_calling=True # This needs to be TRUE for tools
+            enable_automatic_function_calling=True
         )
     return user_chats[user_id]
 
-# +++ NEW: FUNCTION TO SPLIT A COMPLETE STRING +++
+# --- 4. SMART MESSAGE SENDING & SPLITTING FUNCTION ---
 async def split_and_send_string(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """
-    Takes a complete text string, splits it into intelligent chunks, and sends them to the user.
-    """
     if not text:
         return
 
@@ -122,17 +119,14 @@ async def split_and_send_string(update: Update, context: ContextTypes.DEFAULT_TY
     while len(remaining_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
         split_pos = -1
         
-        # Rule 1: Sentence-level split
-        for i in range(SENTENCE_SPLIT_THRESHOLD, 0, -1):
+        for i in range(min(len(remaining_text) - 1, SENTENCE_SPLIT_THRESHOLD), 0, -1):
             if remaining_text[i] in split_chars:
                 split_pos = i + 1; break
         
-        # Rule 2: Word-level split
         if split_pos == -1 and len(remaining_text) > WORD_SPLIT_THRESHOLD:
             pos = remaining_text.rfind(' ', 0, WORD_SPLIT_THRESHOLD)
             if pos != -1: split_pos = pos + 1
 
-        # Rule 3: Character-level split
         if split_pos == -1:
             split_pos = CHARACTER_SPLIT_THRESHOLD
 
@@ -156,15 +150,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action='typing')
         chat_session = get_or_create_chat_session(user.id, user.first_name)
-        
-        # --- MODIFIED: NO STREAMING ---
         response = await chat_session.send_message_async(
             "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         )
-        
-        # +++ NEW: Use the string splitter function +++
         await split_and_send_string(update, context, response.text)
-
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text="🤯 Oops! Failed to generate response. Please try after some time.")
@@ -191,10 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         THREAD_LOCALS.loop = asyncio.get_running_loop()
         THREAD_LOCALS.context.update = update
 
-        # --- MODIFIED: NO STREAMING ---
-        response = await chat_session.send_message_async(message_text) # stream=True hata diya hai
-        
-        # +++ NEW: Use the string splitter function +++
+        response = await chat_session.send_message_async(message_text)
         await split_and_send_string(update, context, response.text)
         
     except Exception as e:
@@ -217,6 +203,12 @@ def main():
 
     job_queue = JobQueue()
     app = ApplicationBuilder().token(TOKEN).job_queue(job_queue).build()
+    
+    # +++ THE FIX: Register shared data and functions in a central place +++
+    app.bot_data['shared_utils'] = {
+        'user_chats': user_chats,
+        'split_and_send_string': split_and_send_string
+    }
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setting", settings.settings_command))
