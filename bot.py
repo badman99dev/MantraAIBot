@@ -43,6 +43,35 @@ logger = logging.getLogger(__name__)
 
 genai.configure(api_key=GEMINI_KEY)
 
+MAX_HISTORY_TOKENS = 50000
+TRIM_BUFFER_TOKENS = 5000
+
+async def manage_chat_history(chat_session: genai.ChatSession, model: genai.GenerativeModel):
+    """Checks the chat history's token count and trims it if it exceeds the limit."""
+    try:
+        token_count = (await model.count_tokens_async(chat_session.history)).total_tokens
+        
+        if token_count > MAX_HISTORY_TOKENS:
+            logger.warning(f"Token count {token_count} is over the limit of {MAX_HISTORY_TOKENS}. Trimming history...")
+            
+            current_history = chat_session.history
+            safe_limit = MAX_HISTORY_TOKENS - TRIM_BUFFER_TOKENS
+            
+            while (await model.count_tokens_async(current_history)).total_tokens > safe_limit:
+                if len(current_history) > 3:
+                    del current_history[2] # Oldest user message after prompt
+                    del current_history[2] # Oldest model reply after prompt
+                else:
+                    logger.warning("History trimming stopped to protect the system prompt.")
+                    break
+                    
+            chat_session.history = current_history
+            new_count = (await model.count_tokens_async(chat_session.history)).total_tokens
+            logger.info(f"History trimmed successfully. New token count is {new_count}")
+    except Exception as e:
+        logger.error(f"Error during chat history management: {e}", exc_info=True)
+
+
 # --- 2. GEMINI MODEL & CHAT MANAGEMENT ---
 model = genai.GenerativeModel(
     model_name=MODEL_NAME,
@@ -83,16 +112,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
     
-    # We use a try-except block here to be extra safe during the first interaction
     try:
-        # Get a clean chat session
         chat_session = get_or_create_chat_session(user.id, user.first_name)
         
-        # Directly send the welcome prompt to Gemini
         welcome_prompt = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         response = await chat_session.send_message_async(welcome_prompt)
         
-        # Send the response to the user
         await context.bot.send_message(
             chat_id=chat_id,
             text=response.text,
@@ -103,9 +128,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🤯 Whoops! Bot ko start karne mein ek error aa gaya hai.\n\n`{type(e).__name__}: {e}`"
+            text="🤯 Oops! Failed to generate response. Please try after some time."
         )
-
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -124,6 +148,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         chat_session = get_or_create_chat_session(user.id, user.first_name)
         
+        await manage_chat_history(chat_session, model)
+        
         THREAD_LOCALS.context = context
         THREAD_LOCALS.loop = asyncio.get_running_loop()
         THREAD_LOCALS.context.update = update
@@ -138,7 +164,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
-        await update.message.reply_text(f"🤯 Whoops! Ek unexpected error aa gaya hai.\n\n`{type(e).__name__}: {e}`\n\nI've logged the details. Please try a different command.")
+        await update.message.reply_text("🤯 Oops! Failed to generate response. Please try after some time.")
     finally:
         if hasattr(THREAD_LOCALS, 'context'):
             del THREAD_LOCALS.context
