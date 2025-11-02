@@ -1,0 +1,11 @@
+# config.py
+
+# Message Splitting Thresholds
+SENTENCE_SPLIT_THRESHOLD = 1500
+WORD_SPLIT_THRESHOLD = 2500
+CHARACTER_SPLIT_THRESHOLD = 2800
+TELEGRAM_MAX_MESSAGE_LENGTH = 3700 # Safety buffer for Telegram's ~4096 limit
+
+# Gemini History Management
+MAX_HISTORY_TOKENS = 50000
+TRIM_BUFFER_TOKENS = 5000
