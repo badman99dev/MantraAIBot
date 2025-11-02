@@ -11,13 +11,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-# Import project-specific modules from the quizzes directory
-from .user_quiz_data import format_detailed_review, get_question_by_id_from_data # <-- THE FIX IS HERE
+from .user_quiz_data import get_question_by_id_from_data
 
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
-SECONDS_PER_QUESTION = 15
+# +++ UPDATED: Default timer changed to 30 seconds +++
+SECONDS_PER_QUESTION = 30 
 POINTS_CORRECT = 100
 POINTS_WRONG_PENALTY = -25
 MAX_SPEED_BONUS = 50
@@ -25,10 +25,10 @@ CONSECUTIVE_TIMEOUT_LIMIT = 5
 RESULTS_DIR = "quiz_results"
 
 # --- Helper Functions ---
-def calculate_points(time_taken):
+def calculate_points(time_taken, question_timer):
     if time_taken < 2: return MAX_SPEED_BONUS
-    if time_taken >= SECONDS_PER_QUESTION: return 0
-    return int(MAX_SPEED_BONUS * (1 - (time_taken / SECONDS_PER_QUESTION)))
+    if time_taken >= question_timer: return 0
+    return int(MAX_SPEED_BONUS * (1 - (time_taken / question_timer)))
 
 # --- The Game Session Class ---
 class QuizSession:
@@ -47,7 +47,7 @@ class QuizSession:
         self.session_id = f"{chat_id}_{int(time.time())}"
         self.consecutive_timeouts = 0
         self.is_suspended = False
-        self.is_temp_quiz = is_temp_quiz # To know if we should offer 'detailed review'
+        self.is_temp_quiz = is_temp_quiz
 
     async def start(self):
         try:
@@ -74,6 +74,11 @@ class QuizSession:
 
         question_id = self.questions_queue[0]
         question_data = get_question_by_id_from_data(question_id, self.questions_data)
+        
+        # +++ NEW: Dynamic Timer Logic +++
+        # Check if AI provided a timer, otherwise use the default 30 seconds
+        question_timer = question_data.get('timer_seconds', SECONDS_PER_QUESTION)
+
         total_answered = len(self.results)
         is_postponed = getattr(self, f"is_postponed_{question_id}", False)
         
@@ -86,7 +91,8 @@ class QuizSession:
         send_task = self.context.bot.send_poll(
             chat_id=self.chat_id, question=f"Q {total_answered + 1}/{len(self.questions_data)}: {question_data['question']}",
             options=question_data["options"], type='quiz', correct_option_id=question_data["correct_option_id"],
-            open_period=SECONDS_PER_QUESTION, is_anonymous=False, reply_markup=InlineKeyboardMarkup(keyboard)
+            open_period=question_timer, # Use the dynamic timer
+            is_anonymous=False, reply_markup=InlineKeyboardMarkup(keyboard)
         )
         try:
             if delete_task: _, message = await asyncio.gather(delete_task, send_task)
@@ -99,7 +105,8 @@ class QuizSession:
         self.active_poll_id = message.poll.id
         self.context.bot_data[self.active_poll_id] = {"session": self, "question_id": question_id, "time_sent": time.time()}
         
-        self.context.job_queue.run_once(self.handle_timeout_job, SECONDS_PER_QUESTION + 1.5, data={'poll_id': self.active_poll_id}, name=f"timeout_{self.active_poll_id}")
+        # Use dynamic timer for the timeout job as well
+        self.context.job_queue.run_once(self.handle_timeout_job, question_timer + 1.5, data={'poll_id': self.active_poll_id}, name=f"timeout_{self.active_poll_id}")
 
     async def handle_answer(self, update: Update):
         poll_id = self.active_poll_id
@@ -115,8 +122,12 @@ class QuizSession:
         time_taken = time.time() - quiz_info['time_sent']
         question_id = self.questions_queue.pop(0)
         question_data = get_question_by_id_from_data(question_id, self.questions_data)
+        
+        # Get the timer for this specific question for point calculation
+        question_timer = question_data.get('timer_seconds', SECONDS_PER_QUESTION)
+        
         is_correct = answer.option_ids[0] == question_data["correct_option_id"]
-        points, status = (POINTS_CORRECT + calculate_points(time_taken), 'correct') if is_correct else (POINTS_WRONG_PENALTY, 'wrong')
+        points, status = (POINTS_CORRECT + calculate_points(time_taken, question_timer), 'correct') if is_correct else (POINTS_WRONG_PENALTY, 'wrong')
         
         self.total_score += points
         self.results.append({'question_id': question_id, 'status': status, 'points_earned': points, 'time_taken': time_taken, 'answered_option_id': answer.option_ids[0]})
@@ -144,6 +155,11 @@ class QuizSession:
 
         if quiz_info.get("question_id") == self.questions_queue[0]:
             question_id = self.questions_queue.pop(0)
+            
+            # Get question data to find its specific timer
+            question_data = get_question_by_id_from_data(question_id, self.questions_data)
+            question_timer = question_data.get('timer_seconds', SECONDS_PER_QUESTION)
+
             status = 'timed_out'
             if postponed:
                 self.questions_queue.append(question_id)
@@ -152,13 +168,14 @@ class QuizSession:
             elif skipped: status = 'skipped'
             elif stopped: status = 'stopped'
             
-            self.results.append({'question_id': question_id, 'status': status, 'points_earned': 0, 'time_taken': SECONDS_PER_QUESTION, 'answered_option_id': None})
+            self.results.append({'question_id': question_id, 'status': status, 'points_earned': 0, 'time_taken': question_timer, 'answered_option_id': None})
             
             if not self.questions_queue or stopped:
                 await self.show_final_score()
             else:
                 await self.send_next_question()
 
+    # ... (rest of the file remains the same) ...
     async def suspend_quiz(self):
         if self.is_suspended: return
         self.is_suspended = True
@@ -190,7 +207,6 @@ class QuizSession:
         
         keyboard = [[InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_try_again:{self.set_id}')]]
         
-        # Only offer 'Detailed Review' if it's NOT a temporary, AI-generated quiz
         if not self.is_temp_quiz:
             if not os.path.exists(RESULTS_DIR): os.makedirs(RESULTS_DIR)
             data_to_save = {'results': self.results, 'quiz_name': self.quiz_name, 'questions_data': self.questions_data}
