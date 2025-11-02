@@ -11,13 +11,30 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# --- API KEY & MODEL POOL SETUP ---
-GEMINI_KEYS_STRING = os.environ.get('GEMINI_KEYS')
-if not GEMINI_KEYS_STRING:
-    raise ValueError("GEMINI_KEYS not found in .env file. Please add it.")
-API_KEYS = [key.strip() for key in GEMINI_KEYS_STRING.split(',')]
+# --- NEW: DYNAMIC API KEY & MODEL POOL SETUP ---
+try:
+    TOTAL_KEYS = int(os.environ.get("TOTAL_GEMINI_KEYS", 0))
+    if TOTAL_KEYS == 0:
+        logger.warning("TOTAL_GEMINI_KEYS environment variable not set or is 0. Attempting to find keys manually.")
+except ValueError:
+    raise ValueError("TOTAL_GEMINI_KEYS must be a valid number.")
+
+API_KEYS = []
+if TOTAL_KEYS > 0:
+    for i in range(1, TOTAL_KEYS + 1):
+        key = os.environ.get(f"GEMINI_KEY_{i}")
+        if key:
+            API_KEYS.append(key)
+        else:
+            logger.warning(f"Found TOTAL_GEMINI_KEYS={TOTAL_KEYS}, but GEMINI_KEY_{i} is missing.")
+else:
+    # Fallback for old single key system, makes it backward compatible
+    single_key = os.environ.get("GEMINI_KEYS") or os.environ.get("GEMINI_KEY")
+    if single_key:
+        API_KEYS.append(single_key)
+
 if not API_KEYS:
-    raise ValueError("GEMINI_KEYS is empty. Please provide at least one API key.")
+    raise ValueError("No Gemini API keys were found. Please set TOTAL_GEMINI_KEYS and GEMINI_KEY_n variables.")
 
 MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
 
@@ -40,6 +57,7 @@ def get_next_model() -> genai.GenerativeModel:
         return model
 
 # --- CHAT SESSION & HISTORY MANAGEMENT ---
+# (The rest of this file remains exactly the same as before)
 user_chats = {} 
 settings.load_user_profiles_settings(settings.user_profiles, user_chats)
 
