@@ -1,32 +1,30 @@
-# bot.py
 import os
 import logging
 from dotenv import load_dotenv
 import threading
-import json
+import asyncio
 from flask import Flask
+import json
 
 # Telegram Bot Library
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, PollAnswerHandler, JobQueue
+from telegram.constants import ParseMode
 
-# Project Files
+# Gemini AI Library
+import google.generativeai as genai
+
+# APNI FILES IMPORT KARNA
+from prompts import SYSTEM_PROMPT_TEMPLATE
+from tools.tool_manager import AVAILABLE_TOOLS
 import settings
 from shared_data import THREAD_LOCALS 
-import gemini_manager
-import telegram_utils
 
-# === QUIZ GAME IMPORTS ===
+# === QUIZ GAME IMPORTS START ===
 from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
+# === QUIZ GAME IMPORTS END ===
 
-# --- 0. SETUP ---
-load_dotenv()
-TOKEN = os.environ['BOT_TOKEN']
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# --- 1. FLASK WEB SERVER ---
+# --- 0. FLASK WEB SERVER SETUP ---
 app_flask = Flask(__name__)
 @app_flask.route('/')
 def hello_world(): return "Xylon AI is alive and kicking!"
@@ -34,26 +32,104 @@ def run_flask():
     port = int(os.environ.get('PORT', 8080))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- 2. TELEGRAM HANDLERS ---
+# --- 1. SETUP ---
+load_dotenv()
+TOKEN = os.environ['BOT_TOKEN']
+GEMINI_KEY = os.environ['GEMINI_KEY']
+MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+genai.configure(api_key=GEMINI_KEY)
+
+MAX_HISTORY_TOKENS = 50000
+TRIM_BUFFER_TOKENS = 5000
+
+async def manage_chat_history(chat_session: genai.ChatSession, model: genai.GenerativeModel):
+    """Checks the chat history's token count and trims it if it exceeds the limit."""
+    try:
+        token_count = (await model.count_tokens_async(chat_session.history)).total_tokens
+        
+        if token_count > MAX_HISTORY_TOKENS:
+            logger.warning(f"Token count {token_count} is over the limit of {MAX_HISTORY_TOKENS}. Trimming history...")
+            
+            current_history = chat_session.history
+            safe_limit = MAX_HISTORY_TOKENS - TRIM_BUFFER_TOKENS
+            
+            while (await model.count_tokens_async(current_history)).total_tokens > safe_limit:
+                if len(current_history) > 3:
+                    del current_history[2] # Oldest user message after prompt
+                    del current_history[2] # Oldest model reply after prompt
+                else:
+                    logger.warning("History trimming stopped to protect the system prompt.")
+                    break
+                    
+            chat_session.history = current_history
+            new_count = (await model.count_tokens_async(chat_session.history)).total_tokens
+            logger.info(f"History trimmed successfully. New token count is {new_count}")
+    except Exception as e:
+        logger.error(f"Error during chat history management: {e}", exc_info=True)
+
+
+# --- 2. GEMINI MODEL & CHAT MANAGEMENT ---
+model = genai.GenerativeModel(
+    model_name=MODEL_NAME,
+    tools=AVAILABLE_TOOLS
+)
+user_chats = {} 
+
+settings.load_user_profiles_settings(settings.user_profiles, user_chats)
+
+def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
+    if user_id not in user_chats:
+        personalization_section = ""
+        if user_id in settings.user_profiles and settings.user_profiles[user_id]:
+            profile = settings.user_profiles[user_id]
+            personalization_section += "\n--- USER'S PERSONAL DATA (Remember This!) ---\n"
+            if 'nickname' in profile: personalization_section += f"- User's Nickname: {profile['nickname']}\n"
+            if 'instruction' in profile: personalization_section += f"- Custom Instruction: {profile['instruction']}\n"
+            if 'hobby' in profile: personalization_section += f"- User's Hobby: {profile['hobby']}\n"
+            if 'memory' in profile: personalization_section += f"- Important Memory: {profile['memory']}\n"
+            
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            user_name=user_name,
+            user_personalization_section=personalization_section
+        )
+        initial_history = [
+            {'role': 'user', 'parts': [{'text': system_prompt}]},
+            {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
+        ]
+        user_chats[user_id] = model.start_chat(
+            history=initial_history,
+            enable_automatic_function_calling=True
+        )
+    return user_chats[user_id]
+
+# --- 3. TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
+    
     try:
-        chat_session = gemini_manager.get_or_create_chat_session(user.id, user.first_name)
-        response_stream = await chat_session.send_message_async(
-            "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes.",
-            stream=True
-        )
-        full_response = await telegram_utils.send_split_message(update, context, response_stream)
+        chat_session = get_or_create_chat_session(user.id, user.first_name)
         
-        # Manually update history with the full response for context
-        if chat_session.history and chat_session.history[-1].role == "model":
-             chat_session.history[-1].parts[0].text = full_response
-
+        welcome_prompt = "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
+        response = await chat_session.send_message_async(welcome_prompt)
+        
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=response.text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
-        await context.bot.send_message(chat_id=chat_id, text="🤯 Oops! Failed to generate response. Please try after some time.")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🤯 Oops! Failed to generate response. Please try after some time."
+        )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -66,43 +142,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings.user_profiles[user.id][state] = message_text
             settings.save_user_profiles()
             await update.message.reply_text(f"✅ Theek hai, maine aapka '{state}' save kar liya hai! Main isse agle conversation se yaad rakhoonga.")
-            if user.id in gemini_manager.user_chats: del gemini_manager.user_chats[user.id]
+            if user.id in user_chats: del user_chats[user.id]
             return
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        chat_session = gemini_manager.get_or_create_chat_session(user.id, user.first_name)
+        chat_session = get_or_create_chat_session(user.id, user.first_name)
         
-        await gemini_manager.manage_chat_history(chat_session)
+        await manage_chat_history(chat_session, model)
         
         THREAD_LOCALS.context = context
         THREAD_LOCALS.loop = asyncio.get_running_loop()
         THREAD_LOCALS.context.update = update
 
-        response_stream = await chat_session.send_message_async(message_text, stream=True)
-        full_response = await telegram_utils.send_split_message(update, context, response_stream)
+        response = await chat_session.send_message_async(message_text)
         
-        # CRITICAL: Manually update the last model message in history with the full text
-        if chat_session.history and chat_session.history[-1].role == "model":
-             chat_session.history[-1].parts[0].text = full_response
-        
+        await update.message.reply_text(
+            response.text,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+
     except Exception as e:
         logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
         await update.message.reply_text("🤯 Oops! Failed to generate response. Please try after some time.")
     finally:
-        if hasattr(THREAD_LOCALS, 'context'): del THREAD_LOCALS.context
-        if hasattr(THREAD_LOCALS, 'loop'): del THREAD_LOCALS.loop
+        if hasattr(THREAD_LOCALS, 'context'):
+            del THREAD_LOCALS.context
+        if hasattr(THREAD_LOCALS, 'loop'):
+            del THREAD_LOCALS.loop
 
-# --- 3. MAIN BOT EXECUTION ---
+# --- 4. MAIN BOT EXECUTION ---
 def main():
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
                 profiles = json.load(f)
-                # Pass the user_chats dict from gemini_manager
-                settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, gemini_manager.user_chats)
+                settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
             logger.error("Could not load user profiles, file might be empty or corrupt.")
-            settings.load_user_profiles_settings({}, gemini_manager.user_chats)
+            settings.load_user_profiles_settings({}, user_chats)
 
     job_queue = JobQueue()
     app = ApplicationBuilder().token(TOKEN).job_queue(job_queue).build()
@@ -114,10 +192,19 @@ def main():
     app.add_handler(PollAnswerHandler(quiz_game_poll_answer_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info(f"🚀 Xylon AI Bot starting polling with {len(gemini_manager.API_KEYS)} API key(s) in rotation.")
+    logger.info(f"🚀 Xylon AI Bot is starting polling with model: {MODEL_NAME}")
     app.run_polling()
 
 if __name__ == "__main__":
+    if os.path.exists(settings.USER_PROFILES_FILE):
+        try:
+            with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
+                profiles = json.load(f)
+                settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
+        except (json.JSONDecodeError, ValueError):
+            logger.error("Could not load user profiles on startup.")
+            settings.load_user_profiles_settings({}, user_chats)
+
     logger.info("🚀 Starting Flask server for Xylon AI in a separate thread...")
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
