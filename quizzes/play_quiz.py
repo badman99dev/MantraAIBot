@@ -1,5 +1,3 @@
-# quizzes/play_quiz.py
-
 import asyncio
 import time
 import os
@@ -11,8 +9,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-# +++ NEW: Import necessary functions and data from other modules +++
-from bot import user_chats, split_and_send_string # For AI interaction
 from .user_quiz_data import format_detailed_review, get_question_by_id_from_data
 
 logger = logging.getLogger(__name__)
@@ -50,7 +46,6 @@ class QuizSession:
         self.is_suspended = False
         self.is_temp_quiz = is_temp_quiz
 
-    # ... (start, send_next_question, handle_answer, etc. remain the same from the previous update) ...
     async def start(self):
         try:
             msg = await self.context.bot.send_message(self.chat_id, text="Get Ready... 3️⃣")
@@ -164,7 +159,6 @@ class QuizSession:
         keyboard = [[InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_try_again:{self.set_id}')]]
         await self.context.bot.send_message(self.chat_id, text="⚠️ Quiz session has been suspended due to inactivity.", reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # +++ MODIFIED: `show_final_score` is now much smarter +++
     async def show_final_score(self):
         if self.is_suspended: return
         self.is_suspended = True
@@ -176,16 +170,13 @@ class QuizSession:
                       f"    ❌ Wrong         »  <code>{wrong_count}</code>\n\n"
                       f"    ✪ <b>Total Points</b>  »  <code>{self.total_score}</code>")
         
-        # --- Save results for ALL quizzes ---
         if not os.path.exists(RESULTS_DIR): os.makedirs(RESULTS_DIR)
         data_to_save = {'results': self.results, 'quiz_name': self.quiz_name, 'questions_data': self.questions_data}
         with open(f"{RESULTS_DIR}/{self.session_id}.json", "w") as f: json.dump(data_to_save, f, indent=2)
 
-        # --- Create dynamic buttons for ALL quizzes ---
         keyboard = [
             [InlineKeyboardButton("📊 Detailed Review", callback_data=f'quizgame_detailed_review:{self.session_id}')]
         ]
-        # Use different "Try Again" logic for custom vs. database quizzes
         if self.is_temp_quiz:
             keyboard.append([InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_retry_from_file:{self.session_id}')])
         else:
@@ -193,44 +184,52 @@ class QuizSession:
 
         await self.context.bot.send_message(self.chat_id, text=score_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         
-        # --- Fire and forget the task to send results to the AI ---
         asyncio.create_task(self.send_results_to_ai())
 
-    # +++ NEW: Function to interact with the AI after the quiz +++
     async def send_results_to_ai(self):
         try:
             logger.info(f"Preparing to send quiz results to AI for user {self.chat_id}")
-            chat_session = user_chats.get(self.chat_id)
-            if not chat_session:
-                logger.warning(f"Could not find active chat session for user {self.chat_id} to send quiz results.")
+            
+            # +++ THE FIX: Get shared data from the central bot_data store +++
+            shared_utils = self.context.bot_data.get('shared_utils', {})
+            user_chats_ref = shared_utils.get('user_chats')
+            split_function_ref = shared_utils.get('split_and_send_string')
+            
+            if not user_chats_ref or not split_function_ref:
+                logger.error("Could not retrieve shared utilities from bot_data.")
                 return
 
-            # Load the results we just saved
+            chat_session = user_chats_ref.get(self.chat_id)
+            if not chat_session:
+                logger.warning(f"No active chat session for user {self.chat_id} to send quiz results.")
+                return
+
             with open(f"{RESULTS_DIR}/{self.session_id}.json", "r") as f:
                 stored_data = json.load(f)
 
             review_chunks = format_detailed_review(stored_data['results'], stored_data['quiz_name'], stored_data['questions_data'])
             if not review_chunks:
-                logger.info("No review to send to AI as no questions were answered.")
                 return
 
             full_review = "\n".join(review_chunks)
             
-            # Construct the prompt for the AI
             prompt_for_ai = (
                 "The user has just finished a quiz. Here is their detailed performance review. "
-                "Based on this, please provide a fun, engaging, and personalized response to the user. "
+                "Based on this, provide a fun, engaging, and personalized response to the user. "
                 "You can congratulate them, point out their strengths, or give them some light-hearted encouragement on their mistakes. Keep it conversational!\n\n"
                 "--- QUIZ REVIEW ---\n"
                 f"{full_review}"
             )
 
-            # Send the prompt and get the AI's commentary
             await self.context.bot.send_chat_action(self.chat_id, 'typing')
             response = await chat_session.send_message_async(prompt_for_ai)
             
-            # Send the AI's response to the user
-            await split_and_send_string(Update(self.chat_id), self.context, response.text)
+            # Create a dummy update object since we don't have the original one here
+            class DummyUpdate:
+                def __init__(self, chat_id):
+                    self.effective_chat = type('DummyChat', (object,), {'id': chat_id})()
+            
+            await split_function_ref(DummyUpdate(self.chat_id), self.context, response.text)
 
         except Exception as e:
             logger.error(f"Failed to send quiz results to AI for user {self.chat_id}: {e}", exc_info=True)
