@@ -5,3 +5,4 @@ httpx
 flask
 pytz
 supabase
+beautifulsoup4
