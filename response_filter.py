@@ -12,14 +12,14 @@ ALLOWED_TAGS = {
 
 def sanitize_html(text: str) -> str:
     """
-    The ultimate, self-healing sanitizer. It uses BeautifulSoup for two critical tasks:
-    1. Auto-correcting malformed HTML nesting (e.g., <b><i></b></i> -> <b><i></i></b>).
-    2. Finding and neutralizing any non-VIP tags.
-    It's designed to be the final solution to all possible HTML-related errors.
+    The ultimate, self-healing sanitizer (Upgraded Version).
+    It uses BeautifulSoup to auto-correct nesting and neutralize non-VIP tags.
+    This version specifically avoids "double escaping" to ensure unsupported tags
+    are displayed cleanly inside `<code>` blocks to the user.
     """
     
     # "Proof of Life"
-    logger.info("✅✅✅ SELF-HEALING SANITIZER IS ALIVE! ✅✅✅")
+    logger.info("✅✅✅ UPGRADED SELF-HEALING SANITIZER IS ALIVE! ✅✅✅")
 
     # Step 1: Parse the text with BeautifulSoup. It will automatically fix broken nesting.
     soup = BeautifulSoup(text, 'html.parser')
@@ -31,15 +31,20 @@ def sanitize_html(text: str) -> str:
         if tag.name not in ALLOWED_TAGS:
             logger.warning(f"Wrapping unsupported tag: <{tag.name}>")
             
-            # Create the opening tag as visible code
+            # --- The Surgery (Upgraded) ---
+            
+            # Recreate the opening tag as a raw string to preserve its attributes
             attrs = " ".join([f'{key}="{escape(str(value))}"' for key, value in tag.attrs.items()])
             opening_tag_str = f"<{tag.name}{' ' if attrs else ''}{attrs}>"
+            
             start_code_tag = soup.new_tag("code")
-            start_code_tag.string = escape(opening_tag_str)
+            # THE FIX: No more escape() here! We pass the raw string directly.
+            start_code_tag.string = opening_tag_str
 
             # Create the closing tag as visible code
             end_code_tag = soup.new_tag("code")
-            end_code_tag.string = escape(f"</{tag.name}>")
+            # THE FIX: No more escape() here either!
+            end_code_tag.string = f"</{tag.name}>"
 
             # Place these new code blocks before and after the original content
             tag.insert_before(start_code_tag)
@@ -49,14 +54,12 @@ def sanitize_html(text: str) -> str:
             tag.unwrap()
 
     # Step 3: The Critical Step - Convert the soup back to a string WITHOUT ghost tags.
-    # .encode_contents() gives us the raw inner HTML of the <body> tag.
-    # We decode it to get a normal string.
     if soup.body:
         sanitized_text = soup.body.encode_contents().decode('utf-8')
     else:
         # Fallback for simple text that doesn't get a <body> tag.
         sanitized_text = str(soup)
 
-    logger.info(f"✨ Final Self-Healed Text: {repr(sanitized_text)}")
+    logger.info(f"✨ Final Upgraded Text: {repr(sanitized_text)}")
 
     return sanitized_text
