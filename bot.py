@@ -19,17 +19,11 @@ from prompts import SYSTEM_PROMPT_TEMPLATE
 from tools.tool_manager import AVAILABLE_TOOLS
 import settings
 from shared_data import THREAD_LOCALS 
-from time_utils import get_current_ist_string # +++ YEH NAYI LINE ADD KARNI HAI +++
+from time_utils import get_current_ist_string
 
 # === QUIZ GAME IMPORTS START ===
 from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
 # === QUIZ GAME IMPORTS END ===
-
-# Message Splitting Thresholds
-SENTENCE_SPLIT_THRESHOLD = 1500
-WORD_SPLIT_THRESHOLD = 2500
-CHARACTER_SPLIT_THRESHOLD = 2800
-TELEGRAM_MAX_MESSAGE_LENGTH = 3700 
 
 # --- 0. FLASK WEB SERVER SETUP ---
 app_flask = Flask(__name__)
@@ -65,7 +59,6 @@ TRIM_BUFFER_TOKENS = 5000
 async def manage_chat_history(chat_session: genai.ChatSession):
     try:
         token_count = (await model.count_tokens_async(chat_session.history)).total_tokens
-        
         if token_count > MAX_HISTORY_TOKENS:
             logger.warning(f"Token count {token_count} is over the limit. Trimming.")
             current_history = chat_session.history
@@ -97,7 +90,7 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             user_name=user_name,
-            current_ist_time_string=get_current_ist_string(), # +++ YAHAN PAR NAYA PARAMETER ADD KARNA HAI +++
+            current_ist_time_string=get_current_ist_string(),
             user_personalization_section=personalization_section
         )
         initial_history = [
@@ -110,42 +103,9 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
         )
     return user_chats[user_id]
 
-# --- 4. SMART MESSAGE SENDING & SPLITTING FUNCTION ---
-async def split_and_send_string(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    if not text:
-        return
+# --- 4. TELEGRAM HANDLERS ---
+# NOTE: The complex `split_and_send_string` function has been REMOVED.
 
-    remaining_text = text
-    split_chars = ['.', '।', '?', '!', '\n']
-
-    while len(remaining_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
-        split_pos = -1
-        
-        for i in range(min(len(remaining_text) - 1, SENTENCE_SPLIT_THRESHOLD), 0, -1):
-            if remaining_text[i] in split_chars:
-                split_pos = i + 1; break
-        
-        if split_pos == -1 and len(remaining_text) > WORD_SPLIT_THRESHOLD:
-            pos = remaining_text.rfind(' ', 0, WORD_SPLIT_THRESHOLD)
-            if pos != -1: split_pos = pos + 1
-
-        if split_pos == -1:
-            split_pos = CHARACTER_SPLIT_THRESHOLD
-
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id, text=remaining_text[:split_pos],
-            parse_mode=ParseMode.HTML, disable_web_page_preview=True
-        )
-        remaining_text = remaining_text[split_pos:]
-        await asyncio.sleep(0.5)
-
-    if remaining_text:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id, text=remaining_text,
-            parse_mode=ParseMode.HTML, disable_web_page_preview=True
-        )
-
-# --- 5. TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
@@ -155,7 +115,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await chat_session.send_message_async(
             "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         )
-        await split_and_send_string(update, context, response.text)
+
+        # +++ THE NEW SIMPLE LOGIC +++
+        for chunk in response.text.split("\n---\n"):
+            if chunk.strip(): # Send only if the chunk is not empty
+                await context.bot.send_message(
+                    chat_id=chat_id, text=chunk.strip(),
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True
+                )
+                await asyncio.sleep(1.0) # 1 second delay between messages
+
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text="🤯 Oops! Failed to generate response. Please try after some time.")
@@ -183,7 +152,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         THREAD_LOCALS.context.update = update
 
         response = await chat_session.send_message_async(message_text)
-        await split_and_send_string(update, context, response.text)
+        
+        # +++ THE NEW SIMPLE LOGIC +++
+        # Using reply_text for the first message to maintain context
+        chunks = [c.strip() for c in response.text.split("\n---\n") if c.strip()]
+        if chunks:
+            # Send the first chunk as a reply
+            await update.message.reply_text(
+                chunks[0],
+                parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            )
+            # Send subsequent chunks as new messages
+            for i in range(1, len(chunks)):
+                await asyncio.sleep(1.0) # 1 second delay
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id, text=chunks[i],
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True
+                )
         
     except Exception as e:
         logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
@@ -192,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if hasattr(THREAD_LOCALS, 'context'): del THREAD_LOCALS.context
         if hasattr(THREAD_LOCALS, 'loop'): del THREAD_LOCALS.loop
 
-# --- 6. MAIN BOT EXECUTION ---
+# --- 5. MAIN BOT EXECUTION ---
 def main():
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
@@ -206,10 +191,9 @@ def main():
     job_queue = JobQueue()
     app = ApplicationBuilder().token(TOKEN).job_queue(job_queue).build()
     
-    # +++ THE FIX: Register shared data and functions in a central place +++
     app.bot_data['shared_utils'] = {
-        'user_chats': user_chats,
-        'split_and_send_string': split_and_send_string
+        'user_chats': user_chats
+        # split_and_send_string is no longer needed
     }
     
     app.add_handler(CommandHandler("start", start))
