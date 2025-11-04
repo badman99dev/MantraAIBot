@@ -4,30 +4,37 @@ from html import escape
 
 logger = logging.getLogger(__name__)
 
-# Hamare VIP Keywords. Inke aage-peeche waale < > safe hain.
-# IMPORTANT: Hyphenated tags like 'tg-spoiler' must be included.
+# Hamare VIP Keywords. Inke aage-peeche waale < > safe rahenge.
 ALLOWED_KEYWORDS = [
     'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
-    'tg-spoiler',  # <-- THE IMPORTANT ONE
-    'a', 'code', 'pre'
+    'tg-spoiler', 'a', 'code', 'pre'
 ]
 
-# Step 1: Create a regex pattern that knows all our VIP keywords, INCLUDING hyphens.
-# This will look like: (b|strong|i|em|...|tg-spoiler|...|/b|/strong|...)
-allowed_pattern = '|'.join(ALLOWED_KEYWORDS + ['/' + k for k in ALLOWED_KEYWORDS])
+# Step 1: Ek "Super Regex" banate hain jo aapke rules ko follow karta hai.
+# Yeh Regex do tarah ki cheezein dhoondhta hai:
+#
+# Part 1: (THE VIPs)
+# < /? (b|strong|i|em|...|tg-spoiler|a|code|pre) ... >
+# Iska matlab hai: Ek '<' jiske baad optional '/' ho, phir hamara ek VIP keyword ho,
+# phir kuch bhi ho (jaise href="..."), aur aakhir mein ek '>'.
+# Ye poora hissa ek group mein capture ho jayega.
+#
+# Part 2: (THE CRIMINALS)
+# < | >
+# Iska matlab hai: Ya phir, koi bhi akela '<' ya '>' dhoondho.
+#
+# Yeh poora Regex ek hi baar mein VIPs aur Criminals, dono ko pakad leta hai.
 
-# Step 2: This is the main regex to find all structures that look like tags.
-# It's designed to be smart and capture two types of things.
-TAG_FINDER_REGEX = re.compile(
-    # Group 1: Matches and captures our perfectly formed VIP tags.
-    # It now correctly handles attributes and hyphens in tag names.
-    # Example: <a href="...">, <b>, </u>, <tg-spoiler>
-    r'(<(' + allowed_pattern + r')(?:\s+[^>]*)?>)' +
+vip_pattern = '|'.join(ALLOWED_KEYWORDS)
+# This is the master Regex that implements your philosophy.
+MASTER_REGEX = re.compile(
+    # Group 1: The VIPs. Captures a full, well-formed allowed tag.
+    r'(</?(' + vip_pattern + r')(?:\s+[^>]*)?>)' +
     
     # OR
     r'|' +
     
-    # Group 2: Matches and captures any stray < or > that is NOT part of a VIP tag.
+    # Group 2: The Criminals. Captures any stray '<' or '>' character.
     r'(<|>)',
     
     re.IGNORECASE
@@ -36,30 +43,31 @@ TAG_FINDER_REGEX = re.compile(
 
 def sanitize_html(text: str) -> str:
     """
-    The ultimate sanitizer, built on the "Neutralize the Criminals" philosophy.
-    It finds every < and > in the text.
-    It only allows them to exist if they are part of a well-formed, allowed tag
-    (including hyphenated ones like <tg-spoiler>).
-    All other "stray" < and > characters are neutralized by escaping them.
-    This is the most direct and robust way to prevent any and all parsing errors.
+    The final sanitizer, built on the "Neutralize the < and >" philosophy.
+    It doesn't recognize "tags". It only recognizes two things:
+    1. VIP structures: < followed by an allowed keyword.
+    2. Criminal characters: any other < or >.
+    
+    It leaves the VIPs untouched and neutralizes the criminals by escaping them.
+    This is the direct implementation of the user's final plan.
     """
 
     def neutralizer(match):
-        # The regex gives us two possible groups. We check which one matched.
-        vip_tag = match.group(1)
-        stray_char = match.group(2)
+        # Hamara Regex do groups deta hai. Hum check karte hain ki kaun sa match hua.
+        vip_structure = match.group(1)
+        criminal_char = match.group(2)
 
-        # Case 1: A VIP tag was found (e.g., <b> or <tg-spoiler>). It's safe. Let it pass.
-        if vip_tag:
-            return vip_tag
+        # Rule 1: Agar VIP structure match hua hai, to use zinda rehne do.
+        if vip_structure:
+            return vip_structure
         
-        # Case 2: A stray < or > was found. It's a criminal. Neutralize it.
-        elif stray_char:
-            logger.warning(f"Neutralizing stray character: '{stray_char}'")
-            return escape(stray_char)
+        # Rule 2: Agar akela criminal character (< ya >) match hua hai, to use neutralize kar do.
+        elif criminal_char:
+            logger.warning(f"Neutralizing criminal character: '{criminal_char}'")
+            return escape(criminal_char)
         
-        # This part should ideally never be reached, but it's a good fallback.
+        # Fallback, jo kabhi nahi chalna chahiye.
         return match.group(0)
 
-    # Run the neutralizer on the entire text.
-    return TAG_FINDER_REGEX.sub(neutralizer, text)
+    # Poore text par is naye, philosophy-driven neutralizer ko chalao.
+    return MASTER_REGEX.sub(neutralizer, text)
