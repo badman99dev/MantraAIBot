@@ -20,6 +20,7 @@ from tools.tool_manager import AVAILABLE_TOOLS
 import settings
 from shared_data import THREAD_LOCALS 
 from time_utils import get_current_ist_string
+from response_filter import sanitize_html  # +++ NEW IMPORT +++
 
 # === QUIZ GAME IMPORTS START ===
 from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
@@ -104,7 +105,6 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
     return user_chats[user_id]
 
 # --- 4. TELEGRAM HANDLERS ---
-# NOTE: The complex `split_and_send_string` function has been REMOVED.
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -116,14 +116,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         )
 
-        # +++ THE NEW SIMPLE LOGIC +++
-        for chunk in response.text.split("\n---\n"):
-            if chunk.strip(): # Send only if the chunk is not empty
-                await context.bot.send_message(
-                    chat_id=chat_id, text=chunk.strip(),
-                    parse_mode=ParseMode.HTML, disable_web_page_preview=True
-                )
-                await asyncio.sleep(1.0) # 1 second delay between messages
+        # +++ APPLY THE SANITIZER +++
+        sanitized_text = sanitize_html(response.text)
+
+        chunks = [c.strip() for c in sanitized_text.split("\n---\n") if c.strip()]
+        for chunk in chunks:
+            await context.bot.send_message(
+                chat_id=chat_id, text=chunk,
+                parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            )
+            await asyncio.sleep(1.0)
 
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
@@ -139,7 +141,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings.user_profiles[user.id][state] = message_text
             settings.save_user_profiles()
             await update.message.reply_text(f"✅ Theek hai, maine aapka '{state}' save kar liya hai! Main isse agle conversation se yaad rakhoonga.")
-            if user.id in user_chats: del user_chats[user_id]
+            if user.id in user_chats: del user_chats[user.id]
             return
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
@@ -154,19 +156,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await chat_session.send_message_async(message_text)
         
         # =================================================================
-        # ===> 🚀 STEP 1: RAW RESPONSE LOGGING (BEFORE ANY SPLITTING) 🚀 <===
+        # ===> 🚀 STEP 1: RAW RESPONSE LOGGING (BEFORE FILTER) 🚀 <===
         # =================================================================
         logger.info(f"--- START: RAW AI RESPONSE FOR USER {user.id} ---")
         logger.info(repr(response.text))
         logger.info(f"--- END: RAW AI RESPONSE FOR USER {user.id} ---")
         # =================================================================
-        
-        # +++ THE NEW SIMPLE LOGIC +++
-        # Using reply_text for the first message to maintain context
-        chunks = [c.strip() for c in response.text.split("\n---\n") if c.strip()]
-        
+
+        # +++ APPLY THE SANITIZER +++
+        sanitized_text = sanitize_html(response.text)
+
         # =================================================================
-        # ===> 🐞 STEP 2: LOGGING SPLIT CHUNKS FOR DEBUGGING 🐞 <===
+        # ===> 🛡️ STEP 2: SANITIZED TEXT LOGGING (AFTER FILTER) 🛡️ <===
+        # =================================================================
+        logger.info(f"--- START: SANITIZED TEXT FOR USER {user.id} ---")
+        logger.info(repr(sanitized_text))
+        logger.info(f"--- END: SANITIZED TEXT FOR USER {user.id} ---")
+        # =================================================================
+
+        chunks = [c.strip() for c in sanitized_text.split("\n---\n") if c.strip()]
+
+        # =================================================================
+        # ===> 🐞 STEP 3: LOGGING SPLIT CHUNKS FOR DEBUGGING 🐞 <===
         # =================================================================
         logger.info(f"--- START: SPLIT CHUNKS FOR USER {user.id} ---")
         if not chunks:
@@ -178,19 +189,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"--- END: SPLIT CHUNKS FOR USER {user.id} ---")
         # =================================================================
 
-        if chunks:
-            # Send the first chunk as a reply
-            await update.message.reply_text(
-                chunks[0],
+        for chunk in chunks:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id, text=chunk,
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True
             )
-            # Send subsequent chunks as new messages
-            for i in range(1, len(chunks)):
-                await asyncio.sleep(1.0) # 1 second delay
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id, text=chunks[i],
-                    parse_mode=ParseMode.HTML, disable_web_page_preview=True
-                )
+            await asyncio.sleep(1.0)
         
     except Exception as e:
         logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
@@ -215,7 +219,6 @@ def main():
     
     app.bot_data['shared_utils'] = {
         'user_chats': user_chats
-        # split_and_send_string is no longer needed
     }
     
     app.add_handler(CommandHandler("start", start))
