@@ -2,72 +2,54 @@ import re
 import logging
 from html import escape
 
+# We get the logger for this file.
 logger = logging.getLogger(__name__)
 
-# Hamare VIP Keywords. Inke aage-peeche waale < > safe rahenge.
-ALLOWED_KEYWORDS = [
-    'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
-    'tg-spoiler', 'a', 'code', 'pre'
-]
-
-# Step 1: Ek "Super Regex" banate hain jo aapke rules ko follow karta hai.
-# Yeh Regex do tarah ki cheezein dhoondhta hai:
-#
-# Part 1: (THE VIPs)
-# < /? (b|strong|i|em|...|tg-spoiler|a|code|pre) ... >
-# Iska matlab hai: Ek '<' jiske baad optional '/' ho, phir hamara ek VIP keyword ho,
-# phir kuch bhi ho (jaise href="..."), aur aakhir mein ek '>'.
-# Ye poora hissa ek group mein capture ho jayega.
-#
-# Part 2: (THE CRIMINALS)
-# < | >
-# Iska matlab hai: Ya phir, koi bhi akela '<' ya '>' dhoondho.
-#
-# Yeh poora Regex ek hi baar mein VIPs aur Criminals, dono ko pakad leta hai.
-
-vip_pattern = '|'.join(ALLOWED_KEYWORDS)
-# This is the master Regex that implements your philosophy.
-MASTER_REGEX = re.compile(
-    # Group 1: The VIPs. Captures a full, well-formed allowed tag.
-    r'(</?(' + vip_pattern + r')(?:\s+[^>]*)?>)' +
-    
-    # OR
-    r'|' +
-    
-    # Group 2: The Criminals. Captures any stray '<' or '>' character.
-    r'(<|>)',
-    
-    re.IGNORECASE
-)
-
+# The VIP List. This is the only list of guests allowed inside.
+ALLOWED_TAGS = {
+    'b', 'strong',      # Bold
+    'i', 'em',          # Italic
+    'u', 'ins',          # Underline
+    's', 'strike', 'del',# Strikethrough
+    'tg-spoiler',        # Spoiler
+    'a',                 # Link
+    'code',              # Inline Code
+    'pre'                # Code Block
+}
 
 def sanitize_html(text: str) -> str:
     """
-    The final sanitizer, built on the "Neutralize the < and >" philosophy.
-    It doesn't recognize "tags". It only recognizes two things:
-    1. VIP structures: < followed by an allowed keyword.
-    2. Criminal characters: any other < or >.
-    
-    It leaves the VIPs untouched and neutralizes the criminals by escaping them.
-    This is the direct implementation of the user's final plan.
+    The ultimate sanitizer with reporting.
+    It uses a fast and robust Regex to find ALL potential HTML tags.
+    For each tag, it strictly checks if it's on the VIP list (ALLOWED_TAGS).
+    - If YES, the tag is a VIP and is left untouched.
+    - If NO, the tag is neutralized, and a WARNING log (yellow color) is generated.
+    Finally, it logs the fully sanitized text for review.
     """
+    
+    # "Proof of Life" to ensure the new filter is running.
+    logger.info("✅✅✅ SANITIZER V-FINAL+LOGS IS ALIVE! ✅✅✅")
 
-    def neutralizer(match):
-        # Hamara Regex do groups deta hai. Hum check karte hain ki kaun sa match hua.
-        vip_structure = match.group(1)
-        criminal_char = match.group(2)
+    tag_regex = re.compile(r'(<[^>]+>)')
 
-        # Rule 1: Agar VIP structure match hua hai, to use zinda rehne do.
-        if vip_structure:
-            return vip_structure
+    def validator(match):
+        potential_tag = match.group(1)
+        tag_name_match = re.search(r'</?([a-zA-Z0-9-]+)', potential_tag)
         
-        # Rule 2: Agar akela criminal character (< ya >) match hua hai, to use neutralize kar do.
-        elif criminal_char:
-            logger.warning(f"Neutralizing criminal character: '{criminal_char}'")
-            return escape(criminal_char)
-        
-        # Fallback, jo kabhi nahi chalna chahiye.
-        return match.group(0)
+        if tag_name_match:
+            tag_name = tag_name_match.group(1).lower()
+            if tag_name in ALLOWED_TAGS:
+                return potential_tag
 
-    # Poore text par is naye, philosophy-driven neutralizer ko chalao.
-    return MASTER_REGEX.sub(neutralizer, text)
+        # If the guest is not on the VIP list, KICK THEM OUT and REPORT IT.
+        # We use logger.warning() which usually shows up as YELLOW in logs.
+        logger.warning(f"🛡️ Neutralized unsupported tag: {potential_tag}")
+        return f"<code>{escape(potential_tag)}</code>"
+
+    # Run the bouncer on the entire text.
+    sanitized_text = tag_regex.sub(validator, text)
+    
+    # Log the final, clean text before sending it out.
+    logger.info(f"✨ Final Sanitized Text: {repr(sanitized_text)}")
+    
+    return sanitized_text
