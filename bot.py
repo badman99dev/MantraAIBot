@@ -5,7 +5,6 @@ import threading
 import asyncio
 from flask import Flask
 import json
-import re # Import Regex
 
 # Telegram Bot Library
 from telegram import Update
@@ -40,13 +39,20 @@ TOKEN = os.environ['BOT_TOKEN']
 GEMINI_KEY = os.environ.get('GEMINI_KEY')
 if not GEMINI_KEY:
     raise ValueError("GEMINI_KEY not found in .env file. Please add it.")
+
 MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 genai.configure(api_key=GEMINI_KEY)
 
 # --- 2. GEMINI MODEL & HISTORY MANAGEMENT ---
-model = genai.GenerativeModel(model_name=MODEL_NAME, tools=AVAILABLE_TOOLS)
+model = genai.GenerativeModel(
+    model_name=MODEL_NAME,
+    tools=AVAILABLE_TOOLS
+)
+
 MAX_HISTORY_TOKENS = 50000
 TRIM_BUFFER_TOKENS = 5000
 
@@ -91,46 +97,15 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             {'role': 'user', 'parts': [{'text': system_prompt}]},
             {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
         ]
-        user_chats[user_id] = model.start_chat(history=initial_history, enable_automatic_function_calling=True)
+        user_chats[user_id] = model.start_chat(
+            history=initial_history,
+            enable_automatic_function_calling=True
+        )
     return user_chats[user_id]
 
-
-# +++ NEW: The Intelligent "HTML Validator & Cleaner" +++
-def clean_html(text: str) -> str:
-    if not text:
-        return ""
-    
-    # 1. Remove unsupported tags (both start and end)
-    unsupported_tags = ['ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'span']
-    for tag in unsupported_tags:
-        text = re.sub(rf'</?{tag}[^>]*>', '', text)
-
-    # 2. Remove <a> tags that do not have an href attribute
-    text = re.sub(r'<a(?![^>]*\shref=)[^>]*>(.*?)</a>', r'\1', text, flags=re.IGNORECASE | re.DOTALL)
-
-    # 3. Find and remove unbalanced/unclosed supported tags
-    supported_tags = ["b", "i", "u", "s", "tg-spoiler", "code", "pre"]
-    for tag in supported_tags:
-        # Loop until all unbalanced tags of this type are removed
-        while True:
-            # Case-insensitive matching for tags
-            start_tag_pattern = re.compile(f"<{tag}[>\\s]", re.IGNORECASE)
-            end_tag_pattern = re.compile(f"</{tag}>", re.IGNORECASE)
-            
-            start_tag_count = len(start_tag_pattern.findall(text))
-            end_tag_count = len(end_tag_pattern.findall(text))
-
-            if start_tag_count == end_tag_count:
-                break # All balanced, move to the next tag
-            
-            logger.warning(f"Unbalanced '{tag}' tag found in chunk. Cleaning...")
-            # If there's an imbalance, remove all tags of this type to be safe
-            text = re.sub(rf'</?{tag}[^>]*>', '', text, flags=re.IGNORECASE)
-    
-    return text
-
-
 # --- 4. TELEGRAM HANDLERS ---
+# NOTE: The complex `split_and_send_string` function has been REMOVED.
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
@@ -141,15 +116,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         )
 
+        # +++ THE NEW SIMPLE LOGIC +++
         for chunk in response.text.split("\n---\n"):
-            if chunk.strip():
-                # +++ USE THE CLEANER BEFORE SENDING +++
-                cleaned_chunk = clean_html(chunk.strip())
+            if chunk.strip(): # Send only if the chunk is not empty
                 await context.bot.send_message(
-                    chat_id=chat_id, text=cleaned_chunk,
+                    chat_id=chat_id, text=chunk.strip(),
                     parse_mode=ParseMode.HTML, disable_web_page_preview=True
                 )
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(1.0) # 1 second delay between messages
 
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
@@ -179,20 +153,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = await chat_session.send_message_async(message_text)
         
+        # +++ THE NEW SIMPLE LOGIC +++
+        # Using reply_text for the first message to maintain context
         chunks = [c.strip() for c in response.text.split("\n---\n") if c.strip()]
         if chunks:
-            # +++ USE THE CLEANER BEFORE SENDING +++
-            cleaned_first_chunk = clean_html(chunks[0])
+            # Send the first chunk as a reply
             await update.message.reply_text(
-                cleaned_first_chunk,
+                chunks[0],
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True
             )
+            # Send subsequent chunks as new messages
             for i in range(1, len(chunks)):
-                await asyncio.sleep(1.0)
-                # +++ USE THE CLEANER BEFORE SENDING +++
-                cleaned_chunk = clean_html(chunks[i])
+                await asyncio.sleep(1.0) # 1 second delay
                 await context.bot.send_message(
-                    chat_id=update.effective_chat.id, text=cleaned_chunk,
+                    chat_id=update.effective_chat.id, text=chunks[i],
                     parse_mode=ParseMode.HTML, disable_web_page_preview=True
                 )
         
@@ -219,6 +193,7 @@ def main():
     
     app.bot_data['shared_utils'] = {
         'user_chats': user_chats
+        # split_and_send_string is no longer needed
     }
     
     app.add_handler(CommandHandler("start", start))
