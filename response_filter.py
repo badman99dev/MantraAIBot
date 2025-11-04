@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 # Hamari VIP list. Yahi tags asli format me dikhenge.
-# This is the single source of truth for our filter.
 ALLOWED_TAGS = {
     'b', 'strong',      # Bold
     'i', 'em',          # Italic
@@ -19,18 +18,19 @@ ALLOWED_TAGS = {
 
 def sanitize_html(text: str) -> str:
     """
-    The ultimate intelligent sanitizer using BeautifulSoup, built exactly as requested.
+    The ultimate intelligent sanitizer using BeautifulSoup.
     It parses the AI's HTML, finds every tag, and if a tag is not on the
     ALLOWED_TAGS list, it "neuters" it by wrapping the start and end tags
-    in `<code>` blocks, effectively turning them into visible plain text
-    while preserving the content inside. This is robust and future-proof.
+    in `<code>` blocks, while preserving the content.
+    It has been specifically designed to handle HTML fragments and avoid
+    adding extra "ghost" closing tags.
     """
     
     # Use 'html.parser', which is built-in and handles broken HTML gracefully.
     soup = BeautifulSoup(text, 'html.parser')
 
     # Use find_all(True) to get a list of every single tag in the document.
-    # We iterate over a copy of the list (by using list()) because we are modifying the tree in-place.
+    # We iterate over a copy of the list because we are modifying the tree.
     for tag in list(soup.find_all(True)):
         
         # Check the tag's name against our VIP list.
@@ -40,7 +40,6 @@ def sanitize_html(text: str) -> str:
             # --- The Surgery ---
             
             # Step A: Create the opening tag as visible code.
-            # We recreate the opening tag as a string to preserve its attributes.
             attrs = " ".join([f'{key}="{escape(str(value))}"' for key, value in tag.attrs.items()])
             opening_tag_str = f"<{tag.name}{' ' if attrs else ''}{attrs}>"
             
@@ -59,6 +58,13 @@ def sanitize_html(text: str) -> str:
             # leaving its content safely in the middle.
             tag.unwrap()
 
-    # Convert the fully corrected soup back into a string.
-    # The str() conversion is smart enough to handle this correctly.
-    return str(soup)
+    # =========================================================================
+    # ===> THE FINAL FIX: Convert the soup back to a string WITHOUT ghost tags <===
+    # =========================================================================
+    # str(soup) creates a full document which adds extra tags.
+    # Instead, we get the contents of the <body> tag directly, which is clean.
+    if soup.body:
+        return ''.join(str(c) for c in soup.body.contents)
+    else:
+        # Fallback for cases where there's no body tag (e.g., just text)
+        return str(soup)
