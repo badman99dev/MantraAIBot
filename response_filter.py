@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 # The VIP List.
 ALLOWED_TAGS = {
     'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
-    'tg-spoiler', 'a', 'code', 'pre'
+    'tg-spoiler', 'a', 'code', 'pre', 'blockquote'
 }
 
 def sanitize_html(text: str) -> str:
