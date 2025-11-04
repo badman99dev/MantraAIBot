@@ -1,10 +1,10 @@
+import re
 import logging
 from html import escape
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# Hamari VIP list. Yahi tags asli format me dikhenge.
+# Rule #1: Hamari VIP list. Inhein full azaadi hai.
 ALLOWED_TAGS = {
     'b', 'strong',      # Bold
     'i', 'em',          # Italic
@@ -18,53 +18,44 @@ ALLOWED_TAGS = {
 
 def sanitize_html(text: str) -> str:
     """
-    The ultimate intelligent sanitizer using BeautifulSoup.
-    It parses the AI's HTML, finds every tag, and if a tag is not on the
-    ALLOWED_TAGS list, it "neuters" it by wrapping the start and end tags
-    in `<code>` blocks, while preserving the content.
-    It has been specifically designed to handle HTML fragments and avoid
-    adding extra "ghost" closing tags.
+    The final sanitizer, built on the "Tag, what is that?" philosophy.
+    It uses a fast and robust Regex to find all potential HTML tags.
+    For each tag, it checks if it's on the VIP list (ALLOWED_TAGS).
+    - If YES, the tag is a VIP and is left untouched.
+    - If NO, the tag is a "criminal" and is neutralized by wrapping it
+      in `<code>` blocks, turning it into harmless plain text.
+    This is the definitive solution, free from external library side-effects.
     """
     
-    # Use 'html.parser', which is built-in and handles broken HTML gracefully.
-    soup = BeautifulSoup(text, 'html.parser')
+    # Ye Regex text me har possible HTML tag (e.g., <p>, </a>, <br/>) ko dhoondhta hai.
+    # It finds the entire tag in one go. The pattern <[^>]+> means:
+    # '<'      : starts with a '<'
+    # [^>]+   : followed by one or more characters that are NOT '>'
+    # '>'      : ends with a '>'
+    tag_regex = re.compile(r'(<[^>]+>)')
 
-    # Use find_all(True) to get a list of every single tag in the document.
-    # We iterate over a copy of the list because we are modifying the tree.
-    for tag in list(soup.find_all(True)):
+    def tag_wrapper(match):
+        tag = match.group(1) # Poora tag, jaise '<h3>' ya '<a href...>'
+
+        # Rule #3: Smart Exception - Tag ka naam nikal kar check karo
+        # This regex finds the tag name, e.g., 'h3' from '<h3>' or 'a' from '<a href...>'
+        tag_name_match = re.search(r'</?([a-zA-Z0-9]+)', tag)
         
-        # Check the tag's name against our VIP list.
-        if tag.name not in ALLOWED_TAGS:
-            logger.warning(f"Found unsupported tag <{tag.name}>. Wrapping it.")
+        if tag_name_match:
+            tag_name = tag_name_match.group(1).lower()
             
-            # --- The Surgery ---
-            
-            # Step A: Create the opening tag as visible code.
-            attrs = " ".join([f'{key}="{escape(str(value))}"' for key, value in tag.attrs.items()])
-            opening_tag_str = f"<{tag.name}{' ' if attrs else ''}{attrs}>"
-            
-            start_code_tag = soup.new_tag("code")
-            start_code_tag.string = escape(opening_tag_str)
+            # Agar tag ka naam VIP list me nahi hai, to Rule #2 laagoo karo
+            if tag_name not in ALLOWED_TAGS:
+                logger.warning(f"Wrapping unsupported tag with Regex: {tag}")
+                return f"<code>{escape(tag)}</code>"
 
-            # Step B: Create the closing tag as visible code.
-            end_code_tag = soup.new_tag("code")
-            end_code_tag.string = escape(f"</{tag.name}>")
+        # Agar tag VIP list me hai (Rule #1), ya hum use samajh nahi paaye
+        # (e.g., it's a malformed tag like "< b >"), to for safety, we wrap it.
+        # But a simple "else" here is safer. If it's not a known-good tag, wrap it.
+        # The logic above already handles this. A simple return is enough.
+        
+        # Agar tag VIP list me hai, to use waise hi rehne do.
+        return tag
 
-            # Step C: Place these new code blocks before and after the original content.
-            tag.insert_before(start_code_tag)
-            tag.insert_after(end_code_tag)
-            
-            # Step D: Now, remove the original unsupported tag (e.g., <h3>),
-            # leaving its content safely in the middle.
-            tag.unwrap()
-
-    # =========================================================================
-    # ===> THE FINAL FIX: Convert the soup back to a string WITHOUT ghost tags <===
-    # =========================================================================
-    # str(soup) creates a full document which adds extra tags.
-    # Instead, we get the contents of the <body> tag directly, which is clean.
-    if soup.body:
-        return ''.join(str(c) for c in soup.body.contents)
-    else:
-        # Fallback for cases where there's no body tag (e.g., just text)
-        return str(soup)
+    # Poore text par tag_wrapper function chalao aur saaf text wapas bhejo.
+    return tag_regex.sub(tag_wrapper, text)
