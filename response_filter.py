@@ -1,55 +1,62 @@
-import re
 import logging
 from html import escape
+from bs4 import BeautifulSoup
 
-# We get the logger for this file.
 logger = logging.getLogger(__name__)
 
-# The VIP List. This is the only list of guests allowed inside.
+# The VIP List.
 ALLOWED_TAGS = {
-    'b', 'strong',      # Bold
-    'i', 'em',          # Italic
-    'u', 'ins',          # Underline
-    's', 'strike', 'del',# Strikethrough
-    'tg-spoiler',        # Spoiler
-    'a',                 # Link
-    'code',              # Inline Code
-    'pre'                # Code Block
+    'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
+    'tg-spoiler', 'a', 'code', 'pre'
 }
 
 def sanitize_html(text: str) -> str:
     """
-    The ultimate sanitizer with reporting.
-    It uses a fast and robust Regex to find ALL potential HTML tags.
-    For each tag, it strictly checks if it's on the VIP list (ALLOWED_TAGS).
-    - If YES, the tag is a VIP and is left untouched.
-    - If NO, the tag is neutralized, and a WARNING log (yellow color) is generated.
-    Finally, it logs the fully sanitized text for review.
+    The ultimate, self-healing sanitizer. It uses BeautifulSoup for two critical tasks:
+    1. Auto-correcting malformed HTML nesting (e.g., <b><i></b></i> -> <b><i></i></b>).
+    2. Finding and neutralizing any non-VIP tags.
+    It's designed to be the final solution to all possible HTML-related errors.
     """
     
-    # "Proof of Life" to ensure the new filter is running.
-    logger.info("✅✅✅ SANITIZER V-FINAL+LOGS IS ALIVE! ✅✅✅")
+    # "Proof of Life"
+    logger.info("✅✅✅ SELF-HEALING SANITIZER IS ALIVE! ✅✅✅")
 
-    tag_regex = re.compile(r'(<[^>]+>)')
+    # Step 1: Parse the text with BeautifulSoup. It will automatically fix broken nesting.
+    soup = BeautifulSoup(text, 'html.parser')
 
-    def validator(match):
-        potential_tag = match.group(1)
-        tag_name_match = re.search(r'</?([a-zA-Z0-9-]+)', potential_tag)
+    # Step 2: Run our "Bouncer" logic on the auto-corrected HTML.
+    # We iterate over a copy of the list because we are modifying the tree.
+    for tag in list(soup.find_all(True)):
         
-        if tag_name_match:
-            tag_name = tag_name_match.group(1).lower()
-            if tag_name in ALLOWED_TAGS:
-                return potential_tag
+        if tag.name not in ALLOWED_TAGS:
+            logger.warning(f"Wrapping unsupported tag: <{tag.name}>")
+            
+            # Create the opening tag as visible code
+            attrs = " ".join([f'{key}="{escape(str(value))}"' for key, value in tag.attrs.items()])
+            opening_tag_str = f"<{tag.name}{' ' if attrs else ''}{attrs}>"
+            start_code_tag = soup.new_tag("code")
+            start_code_tag.string = escape(opening_tag_str)
 
-        # If the guest is not on the VIP list, KICK THEM OUT and REPORT IT.
-        # We use logger.warning() which usually shows up as YELLOW in logs.
-        logger.warning(f"🛡️ Neutralized unsupported tag: {potential_tag}")
-        return f"<code>{escape(potential_tag)}</code>"
+            # Create the closing tag as visible code
+            end_code_tag = soup.new_tag("code")
+            end_code_tag.string = escape(f"</{tag.name}>")
 
-    # Run the bouncer on the entire text.
-    sanitized_text = tag_regex.sub(validator, text)
-    
-    # Log the final, clean text before sending it out.
-    logger.info(f"✨ Final Sanitized Text: {repr(sanitized_text)}")
-    
+            # Place these new code blocks before and after the original content
+            tag.insert_before(start_code_tag)
+            tag.insert_after(end_code_tag)
+            
+            # Remove the original unsupported tag, leaving its content
+            tag.unwrap()
+
+    # Step 3: The Critical Step - Convert the soup back to a string WITHOUT ghost tags.
+    # .encode_contents() gives us the raw inner HTML of the <body> tag.
+    # We decode it to get a normal string.
+    if soup.body:
+        sanitized_text = soup.body.encode_contents().decode('utf-8')
+    else:
+        # Fallback for simple text that doesn't get a <body> tag.
+        sanitized_text = str(soup)
+
+    logger.info(f"✨ Final Self-Healed Text: {repr(sanitized_text)}")
+
     return sanitized_text
