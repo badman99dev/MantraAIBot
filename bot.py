@@ -153,9 +153,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = await chat_session.send_message_async(message_text)
         
+        # =================================================================
+        # ===> 🚀 STEP 1: RAW RESPONSE LOGGING (BEFORE ANY SPLITTING) 🚀 <===
+        # =================================================================
+        logger.info(f"--- START: RAW AI RESPONSE FOR USER {user.id} ---")
+        logger.info(repr(response.text))
+        logger.info(f"--- END: RAW AI RESPONSE FOR USER {user.id} ---")
+        # =================================================================
+        
         # +++ THE NEW SIMPLE LOGIC +++
         # Using reply_text for the first message to maintain context
         chunks = [c.strip() for c in response.text.split("\n---\n") if c.strip()]
+        
+        # =================================================================
+        # ===> 🐞 STEP 2: LOGGING SPLIT CHUNKS FOR DEBUGGING 🐞 <===
+        # =================================================================
+        logger.info(f"--- START: SPLIT CHUNKS FOR USER {user.id} ---")
+        if not chunks:
+            logger.warning("WARNING: AI Response resulted in ZERO chunks after splitting and stripping.")
+        else:
+            for i, chunk in enumerate(chunks):
+                logger.info(f"--- CHUNK {i+1}/{len(chunks)} ---")
+                logger.info(repr(chunk))
+        logger.info(f"--- END: SPLIT CHUNKS FOR USER {user.id} ---")
+        # =================================================================
+
         if chunks:
             # Send the first chunk as a reply
             await update.message.reply_text(
