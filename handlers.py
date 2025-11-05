@@ -49,7 +49,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings.user_profiles[user.id][state] = message_text
             settings.save_user_profiles()
             await update.message.reply_text(f"✅ Theek hai, maine aapka '{state}' save kar liya hai! Main isse agle conversation se yaad rakhoonga.")
-            if user.id in user_chats: del user_chats[user.id] # Use user.id instead of user_id
+            if user.id in user_chats: del user_chats[user.id] # 'user_id' ki jagah 'user.id' hoga
             return
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
