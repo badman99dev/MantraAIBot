@@ -100,8 +100,17 @@ def manage_quiz(
                 return "Error: For 'play_custom' sub_mode, you must provide the 'question_data' as a JSON string."
             
             try:
-                custom_set_id = f"custom_{chat_id}_{int(time.time())}"
+                # --- START OF FIX (v2.0) ---
+                logger.info(f"Attempting to parse custom quiz data: {repr(question_data)}")
                 data = json.loads(question_data)
+                
+                # Double-check: Make sure the basic structure is correct
+                if not isinstance(data, dict) or "name" not in data or "questions" not in data or not isinstance(data["questions"], list):
+                    logger.error(f"Invalid JSON structure in question_data: {data}")
+                    return "Error: The 'question_data' JSON is structurally invalid. It must be an object with 'name' (string) and 'questions' (list of question objects) keys. Please fix the structure and try again."
+                # --- END OF FIX (v2.0) ---
+                
+                custom_set_id = f"custom_{chat_id}_{int(time.time())}"
                 save_custom_quiz_set(context, custom_set_id, data)
                 
                 asyncio.run_coroutine_threadsafe(
@@ -109,10 +118,24 @@ def manage_quiz(
                     loop
                 )
                 return "The custom multi-question quiz you created is starting now. You don't need to say anything else."
-            except json.JSONDecodeError:
-                return "Error: The 'question_data' provided was not a valid JSON string. Please check the format."
+            
+            except json.JSONDecodeError as e:
+                # --- START OF FIX (v2.0) ---
+                logger.error(f"JSON DECODE ERROR for custom quiz: {e}. Raw data was: {repr(question_data)}")
+                error_message = (
+                    "Fatal Error: The 'question_data' you provided was not a valid JSON string. "
+                    f"The parser failed with this error: '{e}'. \n"
+                    "Common mistakes to check for:\n"
+                    "1. Ensure all strings (keys and values) are enclosed in double quotes (\").\n"
+                    "2. Make sure internal double quotes within strings are properly escaped (e.g., \\\"Some text\\\").\n"
+                    "3. Check for trailing commas after the last item in a list or object.\n"
+                    "Please correct the JSON format and call the tool again."
+                )
+                return error_message
+                # --- END OF FIX (v2.0) ---
+
             except Exception as e:
-                logger.error(f"Error starting custom quiz: {e}")
+                logger.error(f"Error starting custom quiz: {e}", exc_info=True)
                 return f"An internal error occurred while starting the custom quiz: {e}"
         
         else:
