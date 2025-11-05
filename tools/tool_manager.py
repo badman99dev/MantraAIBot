@@ -1,4 +1,4 @@
-# --- START OF FINAL UPDATED FILE tools/tool_manager.py ---
+# --- START OF FINAL, CORRECTED tools/tool_manager.py ---
 
 import logging
 import asyncio
@@ -28,36 +28,28 @@ def create_tool_with_status_update(original_tool_func):
         
         if status_message:
             try:
-                context = THREAD_LOCALS.context
+                # <<< YAHAN FREELANCER POST-IT NOTE PADHEGA >>>
+                bot = THREAD_LOCALS.bot
+                chat_id = THREAD_LOCALS.chat_id
                 loop = THREAD_LOCALS.loop
-                chat_id = context._chat_id
                 
                 async def send_update():
-                    # Hum yahan 'typing' action bhi bhej rahe hain for better UX
-                    await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-                    await context.bot.send_message(chat_id=chat_id, text=status_message)
+                    await bot.send_chat_action(chat_id=chat_id, action='typing')
+                    await bot.send_message(chat_id=chat_id, text=status_message)
 
-                # Message ko background me schedule karo aur confirmation ka wait karo
                 future = asyncio.run_coroutine_threadsafe(send_update(), loop)
-                
-                # <<< YAHI ASLI FIX HAI! >>>
-                # Yeh line Worker ko force karti hai ki wo aage na badhe jab tak message bhej na diya jaaye.
-                # Humne 5 second ka timeout rakha hai taaki agar Telegram slow ho to bot hang na ho.
                 future.result(timeout=5)
-                logger.info(f"Status update for '{original_tool_func.__name__}' sent and confirmed.")
+                logger.info(f"Status update for '{original_tool_func.__name__}' sent successfully.")
                 
             except Exception as e:
-                # Agar status update fail bhi ho jaaye, to bhi main tool ko chalne do.
-                logger.error(f"Failed to send status_update for tool '{original_tool_func.__name__}': {e}")
+                # Ab hum error ko aache se log karenge taaki aage aisi problem na ho
+                logger.error(f"Failed to send status_update for tool '{original_tool_func.__name__}'. ERROR: {e}", exc_info=True)
         
-        # Ab, original tool ko call karo, lekin sirf un arguments ke saath jo wo accept karta hai.
         original_params = inspect.signature(original_tool_func).parameters
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in original_params}
         
         return original_tool_func(**filtered_kwargs)
 
-    # Gemini ko batane ke liye ki naye function me 'status_update' parameter hai,
-    # hum uski signature ko manually update karte hain.
     original_sig = inspect.signature(original_tool_func)
     new_params = list(original_sig.parameters.values())
     new_params.append(
@@ -72,7 +64,6 @@ def create_tool_with_status_update(original_tool_func):
     
     return tool_wrapper
 
-# Ab hum har tool ko is magic wrapper se upgrade karke list banayenge
 AVAILABLE_TOOLS = [
     create_tool_with_status_update(youtube_tool),
     create_tool_with_status_update(manage_quiz),
@@ -80,4 +71,4 @@ AVAILABLE_TOOLS = [
     create_tool_with_status_update(get_details_and_download_links),
 ]
 
-# --- END OF FINAL UPDATED FILE tools/tool_manager.py ---
+# --- END OF FINAL, CORRECTED tools/tool_manager.py ---
