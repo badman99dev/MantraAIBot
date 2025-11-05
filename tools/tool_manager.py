@@ -1,4 +1,4 @@
-# --- START OF UPDATED FILE tools/tool_manager.py ---
+# --- START OF FINAL UPDATED FILE tools/tool_manager.py ---
 
 import logging
 import asyncio
@@ -37,14 +37,20 @@ def create_tool_with_status_update(original_tool_func):
                     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
                     await context.bot.send_message(chat_id=chat_id, text=status_message)
 
-                # Message ko background me bhej do taaki tool ka kaam na ruke
-                asyncio.run_coroutine_threadsafe(send_update(), loop)
+                # Message ko background me schedule karo aur confirmation ka wait karo
+                future = asyncio.run_coroutine_threadsafe(send_update(), loop)
+                
+                # <<< YAHI ASLI FIX HAI! >>>
+                # Yeh line Worker ko force karti hai ki wo aage na badhe jab tak message bhej na diya jaaye.
+                # Humne 5 second ka timeout rakha hai taaki agar Telegram slow ho to bot hang na ho.
+                future.result(timeout=5)
+                logger.info(f"Status update for '{original_tool_func.__name__}' sent and confirmed.")
                 
             except Exception as e:
+                # Agar status update fail bhi ho jaaye, to bhi main tool ko chalne do.
                 logger.error(f"Failed to send status_update for tool '{original_tool_func.__name__}': {e}")
         
         # Ab, original tool ko call karo, lekin sirf un arguments ke saath jo wo accept karta hai.
-        # Isse agar koi extra parameter (jaise status_update) ho to error nahi aayega.
         original_params = inspect.signature(original_tool_func).parameters
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in original_params}
         
@@ -74,4 +80,4 @@ AVAILABLE_TOOLS = [
     create_tool_with_status_update(get_details_and_download_links),
 ]
 
-# --- END OF UPDATED FILE tools/tool_manager.py ---
+# --- END OF FINAL UPDATED FILE tools/tool_manager.py ---
