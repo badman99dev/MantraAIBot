@@ -1,5 +1,7 @@
-# bot.py
+# bot.py (Final Corrected Version)
 
+# FIX #1: 'os' module ko import kiya gaya hai taaki file path check karte waqt error na aaye.
+import os
 import threading
 import json
 from telegram.ext import (
@@ -17,13 +19,15 @@ from config import TOKEN, logger
 from handlers import start, handle_message
 from web_server import run_flask
 import settings
-from ai_manager import user_chats # User profiles ko access karne ke liye
+
+# FIX #2: 'user_chats' ko import kiya gaya hai taaki isse quiz module ke saath share kiya jaa sake.
+from ai_manager import user_chats 
 from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
 
 def main():
     """Bot ko set up aur run karta hai."""
     
-    # User profiles load karo
+    # User profiles load karo (ab 'os' imported hai, toh yeh aaram se chalega)
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
@@ -37,6 +41,12 @@ def main():
     # Application banayo
     job_queue = JobQueue()
     app = ApplicationBuilder().token(TOKEN).job_queue(job_queue).build()
+    
+    # FIX #3: 'bot_data' ko wapas add kiya gaya hai.
+    # Yeh data quiz module ko AI se result share karne ke liye zaroori hai.
+    app.bot_data['shared_utils'] = {
+        'user_chats': user_chats
+    }
     
     # === Handlers Add Karo ===
     app.add_handler(CommandHandler("start", start))
