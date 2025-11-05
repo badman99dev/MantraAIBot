@@ -1,16 +1,77 @@
-# tools/tool_manager.py
+# --- START OF UPDATED FILE tools/tool_manager.py ---
 
-# Purane import ko hatao
-# from .youtube_transcript import fetch_youtube_details_from_api 
-# Naya tool import karo
+import logging
+import asyncio
+import inspect
+from functools import wraps
+from typing import Optional
+
+from shared_data import THREAD_LOCALS
+
+# Apne original, simple tools ko import karo
 from .youtube_tool import youtube_tool
-
 from .quiz_tool import manage_quiz
 from .movie_tools import search_movie_in_database, get_details_and_download_links
 
+logger = logging.getLogger(__name__)
+
+def create_tool_with_status_update(original_tool_func):
+    """
+    Yeh ek magic wrapper function hai.
+    Yeh kisi bhi normal tool function ko leta hai aur usme 'status_update' ki
+    superpower daal kar ek naya, upgraded function return karta hai.
+    """
+    
+    @wraps(original_tool_func) # Yeh original function ka naam aur docstring copy karta hai
+    def tool_wrapper(**kwargs):
+        status_message = kwargs.pop('status_update', None)
+        
+        if status_message:
+            try:
+                context = THREAD_LOCALS.context
+                loop = THREAD_LOCALS.loop
+                chat_id = context._chat_id
+                
+                async def send_update():
+                    # Hum yahan 'typing' action bhi bhej rahe hain for better UX
+                    await context.bot.send_chat_action(chat_id=chat_id, action='typing')
+                    await context.bot.send_message(chat_id=chat_id, text=status_message)
+
+                # Message ko background me bhej do taaki tool ka kaam na ruke
+                asyncio.run_coroutine_threadsafe(send_update(), loop)
+                
+            except Exception as e:
+                logger.error(f"Failed to send status_update for tool '{original_tool_func.__name__}': {e}")
+        
+        # Ab, original tool ko call karo, lekin sirf un arguments ke saath jo wo accept karta hai.
+        # Isse agar koi extra parameter (jaise status_update) ho to error nahi aayega.
+        original_params = inspect.signature(original_tool_func).parameters
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in original_params}
+        
+        return original_tool_func(**filtered_kwargs)
+
+    # Gemini ko batane ke liye ki naye function me 'status_update' parameter hai,
+    # hum uski signature ko manually update karte hain.
+    original_sig = inspect.signature(original_tool_func)
+    new_params = list(original_sig.parameters.values())
+    new_params.append(
+        inspect.Parameter('status_update', 
+                          inspect.Parameter.KEYWORD_ONLY, 
+                          default=None, 
+                          annotation=Optional[str])
+    )
+    
+    new_sig = original_sig.replace(parameters=new_params)
+    tool_wrapper.__signature__ = new_sig
+    
+    return tool_wrapper
+
+# Ab hum har tool ko is magic wrapper se upgrade karke list banayenge
 AVAILABLE_TOOLS = [
-    youtube_tool, # <-- NAYA, POWERFUL TOOL
-    manage_quiz,
-    search_movie_in_database,
-    get_details_and_download_links,
+    create_tool_with_status_update(youtube_tool),
+    create_tool_with_status_update(manage_quiz),
+    create_tool_with_status_update(search_movie_in_database),
+    create_tool_with_status_update(get_details_and_download_links),
 ]
+
+# --- END OF UPDATED FILE tools/tool_manager.py ---
