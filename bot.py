@@ -1,234 +1,59 @@
-import os
-import logging
-from dotenv import load_dotenv
+# bot.py
+
 import threading
-import asyncio
-from flask import Flask
 import json
-
-# Telegram Bot Library
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler, PollAnswerHandler, JobQueue
-from telegram.constants import ParseMode
-
-# Gemini AI Library
-import google.generativeai as genai
-
-# APNI FILES IMPORT KARNA
-from prompts import SYSTEM_PROMPT_TEMPLATE
-from tools.tool_manager import AVAILABLE_TOOLS
-import settings
-from shared_data import THREAD_LOCALS 
-from time_utils import get_current_ist_string
-from response_filter import sanitize_html
-
-# === QUIZ GAME IMPORTS START ===
-from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
-# === QUIZ GAME IMPORTS END ===
-
-# --- 0. FLASK WEB SERVER SETUP ---
-app_flask = Flask(__name__)
-@app_flask.route('/')
-def hello_world(): return "Xylon AI is alive and kicking!"
-def run_flask():
-    port = int(os.environ.get('PORT', 8080))
-    app_flask.run(host='0.0.0.0', port=port)
-
-# --- 1. SETUP ---
-load_dotenv()
-TOKEN = os.environ['BOT_TOKEN']
-GEMINI_KEY = os.environ.get('GEMINI_KEY')
-if not GEMINI_KEY:
-    raise ValueError("GEMINI_KEY not found in .env file. Please add it.")
-
-MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-# THE FIX: Added "logging." before getLogger
-logger = logging.getLogger(__name__)
-
-genai.configure(api_key=GEMINI_KEY)
-
-# --- 2. GEMINI MODEL & HISTORY MANAGEMENT ---
-model = genai.GenerativeModel(
-    model_name=MODEL_NAME,
-    tools=AVAILABLE_TOOLS
+from telegram.ext import (
+    ApplicationBuilder, 
+    CommandHandler, 
+    MessageHandler, 
+    CallbackQueryHandler, 
+    PollAnswerHandler,
+    filters,
+    JobQueue
 )
 
-MAX_HISTORY_TOKENS = 50000
-TRIM_BUFFER_TOKENS = 5000
+# --- Apne Modules Import Karo ---
+from config import TOKEN, logger
+from handlers import start, handle_message
+from web_server import run_flask
+import settings
+from ai_manager import user_chats # User profiles ko access karne ke liye
+from quizzes.quiz_game import quiz_game_button_handler, quiz_game_poll_answer_handler
 
-async def manage_chat_history(chat_session: genai.ChatSession):
-    try:
-        token_count = (await model.count_tokens_async(chat_session.history)).total_tokens
-        if token_count > MAX_HISTORY_TOKENS:
-            logger.warning(f"Token count {token_count} is over the limit. Trimming.")
-            current_history = chat_session.history
-            safe_limit = MAX_HISTORY_TOKENS - TRIM_BUFFER_TOKENS
-            while (await model.count_tokens_async(current_history)).total_tokens > safe_limit:
-                if len(current_history) > 3:
-                    del current_history[2]; del current_history[2]
-                else: break
-            chat_session.history = current_history
-            logger.info(f"History trimmed. New count: {(await model.count_tokens_async(chat_session.history)).total_tokens}")
-    except Exception as e:
-        logger.error(f"Error during chat history management: {e}", exc_info=True)
-
-# --- 3. CHAT MANAGEMENT ---
-user_chats = {} 
-settings.load_user_profiles_settings(settings.user_profiles, user_chats)
-
-def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
-    if user_id not in user_chats:
-        logger.info(f"Creating new chat session for user {user_id}...")
-        personalization_section = ""
-        if user_id in settings.user_profiles and settings.user_profiles[user_id]:
-            profile = settings.user_profiles[user_id]
-            personalization_section += "\n--- USER'S PERSONAL DATA (Remember This!) ---\n"
-            if 'nickname' in profile: personalization_section += f"- User's Nickname: {profile['nickname']}\n"
-            if 'instruction' in profile: personalization_section += f"- Custom Instruction: {profile['instruction']}\n"
-            if 'hobby' in profile: personalization_section += f"- User's Hobby: {profile['hobby']}\n"
-            if 'memory' in profile: personalization_section += f"- Important Memory: {profile['memory']}\n"
-            
-        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-            user_name=user_name,
-            current_ist_time_string=get_current_ist_string(),
-            user_personalization_section=personalization_section
-        )
-        initial_history = [
-            {'role': 'user', 'parts': [{'text': system_prompt}]},
-            {'role': 'model', 'parts': [{'text': f"Okay, I understand. I am 𝐗𝐲𝐥𝐨𝐧 𝐀𝐈, ready to chat with {user_name}! 😎"}]}
-        ]
-        user_chats[user_id] = model.start_chat(
-            history=initial_history,
-            enable_automatic_function_calling=True
-        )
-    return user_chats[user_id]
-
-# --- 4. TELEGRAM HANDLERS ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    try:
-        await context.bot.send_chat_action(chat_id=chat_id, action='typing')
-        chat_session = get_or_create_chat_session(user.id, user.first_name)
-        response = await chat_session.send_message_async(
-            "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
-        )
-
-        raw_chunks = response.text.split("\n---\n")
-        
-        for chunk in raw_chunks:
-            stripped_chunk = chunk.strip()
-            if stripped_chunk:
-                sanitized_chunk = sanitize_html(stripped_chunk)
-                
-                await context.bot.send_message(
-                    chat_id=chat_id, text=sanitized_chunk,
-                    parse_mode=ParseMode.HTML, disable_web_page_preview=True
-                )
-                await asyncio.sleep(1.0)
-
-    except Exception as e:
-        logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
-        await context.bot.send_message(chat_id=chat_id, text="🤯 Oops! Failed to generate response. Please try after some time.")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    message_text = update.message.text
-    try:
-        if 'next_message_is' in context.user_data:
-            state = context.user_data.pop('next_message_is')
-            if user.id not in settings.user_profiles: settings.user_profiles[user.id] = {}
-            settings.user_profiles[user.id][state] = message_text
-            settings.save_user_profiles()
-            await update.message.reply_text(f"✅ Theek hai, maine aapka '{state}' save kar liya hai! Main isse agle conversation se yaad rakhoonga.")
-            if user.id in user_chats: del user_chats[user_id]
-            return
-
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        chat_session = get_or_create_chat_session(user.id, user.first_name)
-        
-        await manage_chat_history(chat_session)
-        
-        THREAD_LOCALS.context = context
-        THREAD_LOCALS.loop = asyncio.get_running_loop()
-        THREAD_LOCALS.context.update = update
-
-        response = await chat_session.send_message_async(message_text)
-        
-        logger.info(f"--- START: RAW AI RESPONSE FOR USER {user.id} ---")
-        logger.info(repr(response.text))
-        logger.info(f"--- END: RAW AI RESPONSE FOR USER {user.id} ---")
-
-        raw_chunks = response.text.split("\n---\n")
-        
-        sanitized_chunks = []
-        for chunk in raw_chunks:
-            stripped_chunk = chunk.strip()
-            if stripped_chunk:
-                sanitized_chunk = sanitize_html(stripped_chunk)
-                sanitized_chunks.append(sanitized_chunk)
-        
-        full_sanitized_text = "\n---\n".join(sanitized_chunks)
-        logger.info(f"--- START: FULL SANITIZED TEXT FOR USER {user.id} ---")
-        logger.info(repr(full_sanitized_text))
-        logger.info(f"--- END: FULL SANITIZED TEXT FOR USER {user.id} ---")
-
-        logger.info(f"--- START: FINAL SPLIT CHUNKS FOR USER {user.id} ---")
-        if not sanitized_chunks:
-            logger.warning("WARNING: AI Response resulted in ZERO chunks after processing.")
-        else:
-            for i, chunk in enumerate(sanitized_chunks):
-                logger.info(f"--- CHUNK {i+1}/{len(sanitized_chunks)} ---")
-                logger.info(repr(chunk))
-        logger.info(f"--- END: FINAL SPLIT CHUNKS FOR USER {user.id} ---")
-
-        for chunk in sanitized_chunks:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id, text=chunk,
-                parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
-            await asyncio.sleep(1.0)
-        
-    except Exception as e:
-        logger.error(f"FATAL ERROR in handle_message for user {user.id}: {e}", exc_info=True)
-        await update.message.reply_text("🤯 Oops! Failed to generate response. Please try after some time.")
-    finally:
-        if hasattr(THREAD_LOCALS, 'context'): del THREAD_LOCALS.context
-        if hasattr(THREAD_LOCALS, 'loop'): del THREAD_LOCALS.loop
-
-# --- 5. MAIN BOT EXECUTION ---
 def main():
+    """Bot ko set up aur run karta hai."""
+    
+    # User profiles load karo
     if os.path.exists(settings.USER_PROFILES_FILE):
         try:
             with open(settings.USER_PROFILES_FILE, 'r', encoding='utf-8') as f:
                 profiles = json.load(f)
+                # int() mein convert karna zaroori hai kyunki JSON keys string hoti hain
                 settings.load_user_profiles_settings({int(k): v for k, v in profiles.items()}, user_chats)
         except (json.JSONDecodeError, ValueError):
             logger.error("Could not load user profiles, file might be empty or corrupt.")
             settings.load_user_profiles_settings({}, user_chats)
 
+    # Application banayo
     job_queue = JobQueue()
     app = ApplicationBuilder().token(TOKEN).job_queue(job_queue).build()
     
-    app.bot_data['shared_utils'] = {
-        'user_chats': user_chats
-    }
-    
+    # === Handlers Add Karo ===
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setting", settings.settings_command))
+    
     app.add_handler(CallbackQueryHandler(settings.settings_button_handler, pattern='^settings_'))
     app.add_handler(CallbackQueryHandler(quiz_game_button_handler, pattern='^quizgame_'))
+    
     app.add_handler(PollAnswerHandler(quiz_game_poll_answer_handler))
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info(f"🚀 Xylon AI Bot is starting polling with a single API key.")
+    logger.info("🚀 Xylon AI Bot is starting polling...")
     app.run_polling()
 
 if __name__ == "__main__":
-    logger.info("🚀 Starting Flask server for Xylon AI in a separate thread...")
+    logger.info("🚀 Starting Flask server in a separate thread...")
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.start()
     
