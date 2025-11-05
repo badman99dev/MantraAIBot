@@ -1,4 +1,4 @@
-# ai_manager.py
+# --- START OF UPDATED FILE ai_manager.py ---
 
 import google.generativeai as genai
 from config import logger, MODEL_NAME, MAX_HISTORY_TOKENS, TRIM_BUFFER_TOKENS
@@ -33,6 +33,41 @@ async def manage_chat_history(chat_session: genai.ChatSession):
     except Exception as e:
         logger.error(f"Error during chat history management: {e}", exc_info=True)
 
+# <<< YEH NAYA FUNCTION ADD KIYA GAYA HAI >>>
+def update_system_prompt_with_current_time(user_id: int, user_name: str, chat_session: genai.ChatSession):
+    """
+    Chat history ke system prompt ko current time ke saath update karta hai.
+    Yeh har message se pehle chalna chahiye.
+    """
+    try:
+        if not chat_session.history:
+            logger.warning(f"Cannot update system prompt for user {user_id} as history is empty.")
+            return
+
+        # User ki personalization settings dobara generate karo
+        personalization_section = ""
+        if user_id in settings.user_profiles and settings.user_profiles[user_id]:
+            profile = settings.user_profiles[user_id]
+            personalization_section += "\n--- USER'S PERSONAL DATA (Remember This!) ---\n"
+            if 'nickname' in profile: personalization_section += f"- User's Nickname: {profile['nickname']}\n"
+            if 'instruction' in profile: personalization_section += f"- Custom Instruction: {profile['instruction']}\n"
+            if 'hobby' in profile: personalization_section += f"- User's Hobby: {profile['hobby']}\n"
+            if 'memory' in profile: personalization_section += f"- Important Memory: {profile['memory']}\n"
+        
+        # Naye time ke saath naya system prompt banayo
+        new_system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            user_name=user_name,
+            current_ist_time_string=get_current_ist_string(), # Yahan live time aayega
+            user_personalization_section=personalization_section
+        )
+        
+        # History ke pehle message (jo ki system prompt hai) ko update karo
+        chat_session.history[0].parts[0].text = new_system_prompt
+        logger.info(f"System prompt time updated successfully for user {user_id}.")
+
+    except Exception as e:
+        logger.error(f"Error updating system prompt for user {user_id}: {e}", exc_info=True)
+
 def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSession:
     """User ke liye chat session create ya fetch karta hai."""
     if user_id not in user_chats:
@@ -60,3 +95,5 @@ def get_or_create_chat_session(user_id: int, user_name: str) -> genai.ChatSessio
             enable_automatic_function_calling=True
         )
     return user_chats[user_id]
+
+# --- END OF UPDATED FILE ai_manager.py ---
