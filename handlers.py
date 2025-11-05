@@ -1,4 +1,4 @@
-# handlers.py
+# --- START OF UPDATED FILE handlers.py ---
 
 import asyncio
 from telegram import Update
@@ -6,7 +6,8 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from config import logger
-from ai_manager import get_or_create_chat_session, manage_chat_history, user_chats
+# <<< YAHAN IMPORT ME CHANGE KIYA GAYA HAI >>>
+from ai_manager import get_or_create_chat_session, manage_chat_history, user_chats, update_system_prompt_with_current_time
 from shared_data import THREAD_LOCALS
 from response_filter import sanitize_html
 import settings
@@ -55,6 +56,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
         chat_session = get_or_create_chat_session(user.id, user.first_name)
         
+        # <<< YEH LINE ADD KI GAYI HAI >>>
+        # Har message se pehle system prompt ko live time ke saath refresh karo
+        update_system_prompt_with_current_time(user.id, user.first_name, chat_session)
+        
         await manage_chat_history(chat_session)
         
         THREAD_LOCALS.context = context
@@ -83,3 +88,5 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if hasattr(THREAD_LOCALS, 'context'): del THREAD_LOCALS.context
         if hasattr(THREAD_LOCALS, 'loop'): del THREAD_LOCALS.loop
+
+# --- END OF UPDATED FILE handlers.py ---
