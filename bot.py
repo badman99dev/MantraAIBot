@@ -44,7 +44,7 @@ if not GEMINI_KEY:
 MODEL_NAME = os.environ.get('MODEL_NAME', 'gemini-1.5-flash')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 genai.configure(api_key=GEMINI_KEY)
 
@@ -116,16 +116,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "User has just started the conversation. Greet them warmly as Xylon AI and briefly mention key features like chat, movie search, and our new pro-level quizzes."
         )
 
-        # +++ APPLY THE SANITIZER +++
-        sanitized_text = sanitize_html(response.text)
-
-        chunks = [c.strip() for c in sanitized_text.split("\n---\n") if c.strip()]
-        for chunk in chunks:
-            await context.bot.send_message(
-                chat_id=chat_id, text=chunk,
-                parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
-            await asyncio.sleep(1.0)
+        # =================================================================
+        # ===> UPGRADED ARCHITECTURE: Split FIRST, then Sanitize LATER <===
+        # =================================================================
+        raw_chunks = response.text.split("\n---\n")
+        
+        for chunk in raw_chunks:
+            stripped_chunk = chunk.strip()
+            if stripped_chunk:
+                # Sanitize each individual chunk before sending
+                sanitized_chunk = sanitize_html(stripped_chunk)
+                
+                await context.bot.send_message(
+                    chat_id=chat_id, text=sanitized_chunk,
+                    parse_mode=ParseMode.HTML, disable_web_page_preview=True
+                )
+                await asyncio.sleep(1.0)
 
     except Exception as e:
         logger.error(f"FATAL ERROR during /start for user {user.id}: {e}", exc_info=True)
@@ -141,7 +147,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             settings.user_profiles[user.id][state] = message_text
             settings.save_user_profiles()
             await update.message.reply_text(f"✅ Theek hai, maine aapka '{state}' save kar liya hai! Main isse agle conversation se yaad rakhoonga.")
-            if user.id in user_chats: del user_chats[user.id]
+            if user.id in user_chats: del user_chats[user_id]
             return
 
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
@@ -156,40 +162,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await chat_session.send_message_async(message_text)
         
         # =================================================================
-        # ===> 🚀 STEP 1: RAW RESPONSE LOGGING (BEFORE FILTER) 🚀 <===
+        # ===> 🚀 STEP 1: RAW RESPONSE LOGGING (BEFORE ANY PROCESSING) 🚀 <===
         # =================================================================
         logger.info(f"--- START: RAW AI RESPONSE FOR USER {user.id} ---")
         logger.info(repr(response.text))
         logger.info(f"--- END: RAW AI RESPONSE FOR USER {user.id} ---")
         # =================================================================
 
-        # +++ APPLY THE SANITIZER +++
-        sanitized_text = sanitize_html(response.text)
+        # =================================================================
+        # ===> UPGRADED ARCHITECTURE: Split FIRST, then Sanitize LATER <===
+        # =================================================================
+        raw_chunks = response.text.split("\n---\n")
+        
+        # We create a new list for the clean chunks to log them all together later.
+        sanitized_chunks = []
+
+        for chunk in raw_chunks:
+            stripped_chunk = chunk.strip()
+            if stripped_chunk:
+                # Sanitize each individual chunk
+                sanitized_chunk = sanitize_html(stripped_chunk)
+                sanitized_chunks.append(sanitized_chunk)
+        
+        # This part remains for logging, it doesn't affect the sending logic.
+        # Your old logging logic for sanitized_text and chunks is preserved here.
+        
+        # =================================================================
+        # ===> 🛡️ STEP 2: SANITIZED TEXT LOGGING (FOR THE WHOLE MESSAGE) 🛡️ <===
+        # =================================================================
+        # We join the sanitized chunks back just for a complete log view.
+        full_sanitized_text = "\n---\n".join(sanitized_chunks)
+        logger.info(f"--- START: FULL SANITIZED TEXT FOR USER {user.id} ---")
+        logger.info(repr(full_sanitized_text))
+        logger.info(f"--- END: FULL SANITIZED TEXT FOR USER {user.id} ---")
+        # =================================================================
 
         # =================================================================
-        # ===> 🛡️ STEP 2: SANITIZED TEXT LOGGING (AFTER FILTER) 🛡️ <===
+        # ===> 🐞 STEP 3: LOGGING FINAL SPLIT CHUNKS FOR DEBUGGING 🐞 <===
         # =================================================================
-        logger.info(f"--- START: SANITIZED TEXT FOR USER {user.id} ---")
-        logger.info(repr(sanitized_text))
-        logger.info(f"--- END: SANITIZED TEXT FOR USER {user.id} ---")
-        # =================================================================
-
-        chunks = [c.strip() for c in sanitized_text.split("\n---\n") if c.strip()]
-
-        # =================================================================
-        # ===> 🐞 STEP 3: LOGGING SPLIT CHUNKS FOR DEBUGGING 🐞 <===
-        # =================================================================
-        logger.info(f"--- START: SPLIT CHUNKS FOR USER {user.id} ---")
-        if not chunks:
-            logger.warning("WARNING: AI Response resulted in ZERO chunks after splitting and stripping.")
+        logger.info(f"--- START: FINAL SPLIT CHUNKS FOR USER {user.id} ---")
+        if not sanitized_chunks:
+            logger.warning("WARNING: AI Response resulted in ZERO chunks after processing.")
         else:
-            for i, chunk in enumerate(chunks):
-                logger.info(f"--- CHUNK {i+1}/{len(chunks)} ---")
+            for i, chunk in enumerate(sanitized_chunks):
+                logger.info(f"--- CHUNK {i+1}/{len(sanitized_chunks)} ---")
                 logger.info(repr(chunk))
-        logger.info(f"--- END: SPLIT CHUNKS FOR USER {user.id} ---")
+        logger.info(f"--- END: FINAL SPLIT CHUNKS FOR USER {user.id} ---")
         # =================================================================
 
-        for chunk in chunks:
+        # Now, we send the already sanitized chunks one by one.
+        for chunk in sanitized_chunks:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id, text=chunk,
                 parse_mode=ParseMode.HTML, disable_web_page_preview=True
