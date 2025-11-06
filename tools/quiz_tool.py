@@ -43,10 +43,12 @@ def manage_quiz(
     """
     Manages all quiz-related activities. Can send a single poll, search for quiz sets, or start a full multi-question quiz game.
 
+    IMPORTANT AI INSTRUCTION: To search for available quizzes, you MUST use sub_mode='search_sets'. This sub_mode lists ALL available quizzes and DOES NOT take any other arguments like 'query' or a search term.
+
     Args:
         mode (str): The primary action. Must be 'single_question' or 'multi_question'.
-        sub_mode (Optional[str]): The secondary action for 'multi_question' mode. Can be 'search_sets', 'play_set', or 'play_custom'.
-        set_id (Optional[str]): The unique ID of the quiz set to play (used with sub_mode 'play_set' or for creating a custom game ID).
+        sub_mode (Optional[str]): The secondary action for 'multi_question' mode. Can be 'search_sets' (to list all quizzes), 'play_set' (to start a pre-made quiz), or 'play_custom' (to start an AI-generated quiz).
+        set_id (Optional[str]): The unique ID of the quiz set to play (used with sub_mode 'play_set').
         question (Optional[str]): The question text for a 'single_question' poll.
         options (Optional[List[str]]): A list of 4 answer options for a 'single_question' poll.
         correct_option_index (Optional[int]): The 0-based index of the correct answer for a 'single_question' poll.
@@ -56,6 +58,7 @@ def manage_quiz(
     Returns:
         str: A confirmation message or data for the AI to process and show to the user.
     """
+    # ... function ka code yahan se shuru hota hai ...
     logger.info(f"[QUIZ TOOL] Called with mode: {mode}, sub_mode: {sub_mode}")
     
     try:
