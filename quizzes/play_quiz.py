@@ -1,3 +1,5 @@
+# --- START OF UPDATED FILE quizzes/play_quiz.py ---
+
 import asyncio
 import time
 import os
@@ -8,8 +10,13 @@ from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
 
-from .user_quiz_data import format_detailed_review, get_question_by_id_from_data
+# === MODIFIED IMPORTS ===
+# In functions se humein quiz data aur AI chat session milega
+from .user_quiz_data import get_question_by_id_from_data
+from ai_manager import user_chats 
+from response_filter import sanitize_html
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +28,91 @@ MAX_SPEED_BONUS = 50
 CONSECUTIVE_TIMEOUT_LIMIT = 5
 RESULTS_DIR = "quiz_results"
 
-# --- Helper Functions ---
-def calculate_points(time_taken, question_timer):
-    if time_taken < 2: return MAX_SPEED_BONUS
-    if time_taken >= question_timer: return 0
-    return int(MAX_SPEED_BONUS * (1 - (time_taken / question_timer)))
+
+# ================================================================================= #
+# ===> START: NAYA "PRO MOVE" LOGIC (LIVE CONTEXT INJECTION) <===
+# ================================================================================= #
+
+def _generate_live_quiz_report(session: 'QuizSession') -> str:
+    """AI ke context ke liye ek live report string banata hai."""
+    if not hasattr(session, 'questions_data'): return ""
+
+    report_lines = [
+        "--- 🔴 LIVE QUIZ REPORT (For AI's Eyes Only. Do not show this block to the user.) ---",
+        f"Quiz Name: {escape(session.quiz_name)}",
+        f"Current Score: {session.total_score}",
+        "Status:",
+    ]
+    
+    for result in session.results:
+        q_data = get_question_by_id_from_data(result['question_id'], session.questions_data)
+        if not q_data: continue
+        
+        status_icon = "✅" if result['status'] == 'correct' else ("❌" if result['status'] in ['wrong', 'timed_out', 'skipped'] else "⏹️")
+        user_answer_text = f"(User chose: '{escape(q_data['options'][result['answered_option_id']])}')" if result.get('answered_option_id') is not None else "(User did not answer)"
+        correct_answer_text = f"(Correct: '{escape(q_data['options'][q_data['correct_option_id']])}')"
+        
+        report_lines.append(
+            f"  {status_icon} Q: {escape(q_data['question'])} {user_answer_text} {correct_answer_text}"
+        )
+
+    if session.questions_queue and not session.is_suspended:
+        current_q_id = session.questions_queue[0]
+        q_data = get_question_by_id_from_data(current_q_id, session.questions_data)
+        if q_data:
+            report_lines.append(
+                f"  ⏳ CURRENT Q: {escape(q_data['question'])} (Waiting for user's answer...)"
+            )
+
+    report_lines.append("--- END OF REPORT ---")
+    return "\n".join(report_lines)
+
+
+async def _update_ai_context_with_quiz_state(user_id: int, session: 'QuizSession'):
+    """User ko message bheje bina AI ke chat history ko silently update karta hai."""
+    try:
+        if user_id not in user_chats: return
+
+        chat_session = user_chats[user_id]
+        live_report = _generate_live_quiz_report(session)
+        if not live_report: return
+
+        # History ko ulta check karo taaki last report jaldi mil jaye
+        for i in range(len(chat_session.history) - 1, -1, -1):
+            if chat_session.history[i].role == 'model':
+                if "--- 🔴 LIVE QUIZ REPORT" in chat_session.history[i].parts[0].text:
+                    chat_session.history[i].parts[0].text = live_report
+                    logger.info(f"Updated live quiz context for user {user_id}")
+                    return
+
+        # Agar pichli report nahi mili (quiz ka pehla update hai)
+        from google.generativeai.types import content_types
+        new_content = content_types.to_content({'role': 'model', 'parts': [{'text': live_report}]})
+        chat_session.history.append(new_content)
+        logger.info(f"Injected initial live quiz context for user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to update AI context for user {user_id}: {e}", exc_info=True)
+
+
+async def _remove_ai_quiz_context(user_id: int):
+    """Quiz khatm hone par AI ki history se live report ko saaf karta hai."""
+    try:
+        if user_id not in user_chats: return
+        chat_session = user_chats[user_id]
+        
+        for i in range(len(chat_session.history) - 1, -1, -1):
+            if chat_session.history[i].role == 'model' and "--- 🔴 LIVE QUIZ REPORT" in chat_session.history[i].parts[0].text:
+                del chat_session.history[i]
+                logger.info(f"Cleaned up quiz context for user {user_id}")
+                return
+    except Exception as e:
+        logger.error(f"Failed to clean up AI context for user {user_id}: {e}", exc_info=True)
+
+
+# ================================================================================= #
+# ===> END: NAYA "PRO MOVE" LOGIC <===
+# ================================================================================= #
+
 
 # --- The Game Session Class ---
 class QuizSession:
@@ -68,6 +155,11 @@ class QuizSession:
                 except BadRequest: pass
             await self.show_final_score()
             return
+        
+        # === NAYA CODE ===
+        # Pehle question par context inject karo
+        if len(self.results) == 0:
+            asyncio.create_task(_update_ai_context_with_quiz_state(self.chat_id, self))
 
         question_id = self.questions_queue[0]
         question_data = get_question_by_id_from_data(question_id, self.questions_data)
@@ -116,6 +208,11 @@ class QuizSession:
         
         self.total_score += points
         self.results.append({'question_id': question_id, 'status': status, 'points_earned': points, 'time_taken': time_taken, 'answered_option_id': answer.option_ids[0]})
+        
+        # === NAYA CODE ===
+        # Har answer ke baad context update karo
+        asyncio.create_task(_update_ai_context_with_quiz_state(update.poll_answer.user.id, self))
+
         await asyncio.sleep(0.7)
         await self.send_next_question()
 
@@ -141,6 +238,11 @@ class QuizSession:
             elif skipped: status = 'skipped'
             elif stopped: status = 'stopped'
             self.results.append({'question_id': question_id, 'status': status, 'points_earned': 0, 'time_taken': question_timer, 'answered_option_id': None})
+            
+            # === NAYA CODE ===
+            # Timeout/Skip/Stop par context update karo
+            asyncio.create_task(_update_ai_context_with_quiz_state(self.chat_id, self))
+
             if not self.questions_queue or stopped:
                 await self.show_final_score()
             else:
@@ -158,7 +260,11 @@ class QuizSession:
         logger.warning(f"Quiz suspended for chat {self.chat_id} due to inactivity.")
         keyboard = [[InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_try_again:{self.set_id}')]]
         await self.context.bot.send_message(self.chat_id, text="⚠️ Quiz session has been suspended due to inactivity.", reply_markup=InlineKeyboardMarkup(keyboard))
-    
+        
+        # === NAYA CODE ===
+        # Inactivity par context clean karo
+        asyncio.create_task(_remove_ai_quiz_context(self.chat_id))
+
     async def show_final_score(self):
         if self.is_suspended: return
         self.is_suspended = True
@@ -184,52 +290,42 @@ class QuizSession:
 
         await self.context.bot.send_message(self.chat_id, text=score_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         
-        asyncio.create_task(self.send_results_to_ai())
+        # === NAYA CODE ===
+        # Ab hum final commentary ke liye AI ko trigger karenge
+        asyncio.create_task(self.get_final_commentary_from_ai())
 
-    async def send_results_to_ai(self):
+    # === NAYA FUNCTION (Class ke andar) ===
+    async def get_final_commentary_from_ai(self):
+        """Final commentary ke liye AI ko trigger karta hai aur context clean karta hai."""
         try:
-            logger.info(f"Preparing to send quiz results to AI for user {self.chat_id}")
-            
-            # +++ THE FIX: Get shared data from the central bot_data store +++
-            shared_utils = self.context.bot_data.get('shared_utils', {})
-            user_chats_ref = shared_utils.get('user_chats')
-            split_function_ref = shared_utils.get('split_and_send_string')
-            
-            if not user_chats_ref or not split_function_ref:
-                logger.error("Could not retrieve shared utilities from bot_data.")
-                return
-
-            chat_session = user_chats_ref.get(self.chat_id)
-            if not chat_session:
-                logger.warning(f"No active chat session for user {self.chat_id} to send quiz results.")
-                return
-
-            with open(f"{RESULTS_DIR}/{self.session_id}.json", "r") as f:
-                stored_data = json.load(f)
-
-            review_chunks = format_detailed_review(stored_data['results'], stored_data['quiz_name'], stored_data['questions_data'])
-            if not review_chunks:
-                return
-
-            full_review = "\n".join(review_chunks)
+            if self.chat_id not in user_chats: return
+            chat_session = user_chats[self.chat_id]
             
             prompt_for_ai = (
-                "The user has just finished a quiz. Here is their detailed performance review. "
-                "Based on this, provide a fun, engaging, and personalized response to the user. "
-                "You can congratulate them, point out their strengths, or give them some light-hearted encouragement on their mistakes. Keep it conversational!\n\n"
-                "--- QUIZ REVIEW ---\n"
-                f"{full_review}"
+                "The quiz has just finished. Your internal live report is now complete. "
+                "Based on this final report, provide a fun, engaging, and personalized final commentary to the user. "
+                "Congratulate them, mention their score, and encourage them to play again!"
             )
-
+            
             await self.context.bot.send_chat_action(self.chat_id, 'typing')
             response = await chat_session.send_message_async(prompt_for_ai)
             
-            # Create a dummy update object since we don't have the original one here
-            class DummyUpdate:
-                def __init__(self, chat_id):
-                    self.effective_chat = type('DummyChat', (object,), {'id': chat_id})()
-            
-            await split_function_ref(DummyUpdate(self.chat_id), self.context, response.text)
+            # AI ke response ko user ko bhejo
+            raw_chunks = response.text.split("\n---\n")
+            for chunk in raw_chunks:
+                stripped_chunk = chunk.strip()
+                if stripped_chunk:
+                    sanitized_chunk = sanitize_html(stripped_chunk)
+                    await self.context.bot.send_message(
+                        chat_id=self.chat_id, text=sanitized_chunk,
+                        parse_mode=ParseMode.HTML, disable_web_page_preview=True
+                    )
+                    await asyncio.sleep(0.5)
 
         except Exception as e:
-            logger.error(f"Failed to send quiz results to AI for user {self.chat_id}: {e}", exc_info=True)
+            logger.error(f"Failed to get final commentary from AI for user {self.chat_id}: {e}", exc_info=True)
+        finally:
+            # Bahut important: Commentary ke baad context hamesha clean karo
+            await _remove_ai_quiz_context(self.chat_id)
+
+# --- END OF UPDATED FILE quizzes/play_quiz.py ---
