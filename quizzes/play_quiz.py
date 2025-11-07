@@ -38,8 +38,10 @@ RESULTS_DIR = "quiz_results"
 def get_question_by_id_from_data(qid, questions_data):
     return next((q for q in questions_data if q["id"] == qid), None)
 
+# quizzes/play_quiz.py -> Sirf is function ko replace karein
+
 def _generate_live_quiz_report(session: 'QuizSession') -> str:
-    """AI ke context ke liye ek live report string banata hai. (FINAL UPGRADED)"""
+    """AI ke context ke liye ek live report string banata hai. (TRUE FINAL VERSION)"""
     if not hasattr(session, 'questions_data'): return ""
 
     report_lines = [
@@ -53,21 +55,42 @@ def _generate_live_quiz_report(session: 'QuizSession') -> str:
         q_data = get_question_by_id_from_data(result['question_id'], session.questions_data)
         if not q_data: continue
         
-        report_lines.append(f"  Q: {escape(q_data['question'])}")
-        for i, option in enumerate(q_data['options']):
-            indicator = ""
-            is_correct = (i == q_data['correct_option_id'])
-            user_chose = (result.get('answered_option_id') == i)
+        # === THE UPGRADE IS HERE ===
+        # Ab yeh Timed Out aur Skipped ko bhi aache se handle karega
+        status = result['status']
+        status_indicator = ""
+        if status == 'timed_out':
+            status_indicator = " (⏰ Timed Out)"
+        elif status == 'skipped':
+            status_indicator = " (⏩ Skipped)"
+        
+        report_lines.append(f"  Q: {escape(q_data['question'])}{status_indicator}")
+        
+        # Options ko tabhi dikhao jab user ne answer diya ho ya time out/skip hua ho
+        if status in ['correct', 'wrong', 'timed_out', 'skipped']:
+            for i, option in enumerate(q_data['options']):
+                indicator = ""
+                is_correct = (i == q_data['correct_option_id'])
+                user_chose_this = (result.get('answered_option_id') == i)
 
-            if is_correct and user_chose:
-                indicator = " (✅ Your Correct Answer)"
-            elif is_correct:
-                indicator = " (✅ Correct Answer)"
-            elif user_chose:
-                indicator = " (❌ Your Choice)"
-            
-            report_lines.append(f"    - {escape(option)}{indicator}")
+                # Case 1: User ne sahi jawab diya
+                if is_correct and user_chose_this:
+                    indicator = " (✅ Your Correct Answer)"
+                # Case 2: Yeh sahi jawab hai (aur user ne ise nahi chuna)
+                elif is_correct:
+                    indicator = " (✅ Correct Answer)"
+                # Case 3: User ne ise chuna, par yeh galat tha
+                elif user_chose_this:
+                    indicator = " (❌ Your Choice)"
+                
+                report_lines.append(f"    - {escape(option)}{indicator}")
+        # Agar user ne answer hi nahi diya (e.g. timeout), toh correct answer batao
+        if result.get('answered_option_id') is None and status != 'postponed':
+             correct_option_text = escape(q_data['options'][q_data['correct_option_id']])
+             report_lines.append(f"    (Correct answer was: '{correct_option_text}')")
 
+
+    # Current question ka logic same rahega
     if session.questions_queue and not session.is_suspended:
         current_q_id = session.questions_queue[0]
         q_data = get_question_by_id_from_data(current_q_id, session.questions_data)
