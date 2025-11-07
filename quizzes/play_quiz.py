@@ -12,14 +12,15 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
-# === MODIFIED IMPORTS (THE FIX) ===
-# Hum ab 'get_question_by_id_from_data' ko import nahi karenge kyunki woh isi file mein hai
-from ai_manager import user_chats 
+# === THE FIX ===
+# Hum ab ai_manager ko import nahi karenge
+# from ai_manager import user_chats 
 from response_filter import sanitize_html
 
 logger = logging.getLogger(__name__)
 
 # --- Constants ---
+# ... (Constants section poora same rahega) ...
 SECONDS_PER_QUESTION = 30
 POINTS_CORRECT = 100
 POINTS_WRONG_PENALTY = -25
@@ -29,7 +30,7 @@ RESULTS_DIR = "quiz_results"
 
 
 # ================================================================================= #
-# ===> START: "PRO MOVE" LOGIC (LIVE CONTEXT INJECTION) <===
+# ===> "PRO MOVE" LOGIC (UPDATED FOR THE FIX) <===
 # ================================================================================= #
 
 def get_question_by_id_from_data(qid, questions_data):
@@ -37,7 +38,7 @@ def get_question_by_id_from_data(qid, questions_data):
     return next((q for q in questions_data if q["id"] == qid), None)
 
 def _generate_live_quiz_report(session: 'QuizSession') -> str:
-    """AI ke context ke liye ek live report string banata hai."""
+    # ... (Yeh function poora same rahega) ...
     if not hasattr(session, 'questions_data'): return ""
 
     report_lines = [
@@ -71,15 +72,18 @@ def _generate_live_quiz_report(session: 'QuizSession') -> str:
     return "\n".join(report_lines)
 
 
-async def _update_ai_context_with_quiz_state(user_id: int, session: 'QuizSession'):
+async def _update_ai_context_with_quiz_state(context: ContextTypes.DEFAULT_TYPE, user_id: int, session: 'QuizSession'):
     """User ko message bheje bina AI ke chat history ko silently update karta hai."""
     try:
+        # === THE FIX IS HERE ===
+        user_chats = context.bot_data.get('user_chats', {})
         if user_id not in user_chats: return
 
         chat_session = user_chats[user_id]
         live_report = _generate_live_quiz_report(session)
         if not live_report: return
 
+        # ... (baaki ka logic poora same rahega) ...
         for i in range(len(chat_session.history) - 1, -1, -1):
             if chat_session.history[i].role == 'model':
                 if "--- 🔴 LIVE QUIZ REPORT" in chat_session.history[i].parts[0].text:
@@ -95,10 +99,13 @@ async def _update_ai_context_with_quiz_state(user_id: int, session: 'QuizSession
         logger.error(f"Failed to update AI context for user {user_id}: {e}", exc_info=True)
 
 
-async def _remove_ai_quiz_context(user_id: int):
+async def _remove_ai_quiz_context(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Quiz khatm hone par AI ki history se live report ko saaf karta hai."""
     try:
+        # === THE FIX IS HERE ===
+        user_chats = context.bot_data.get('user_chats', {})
         if user_id not in user_chats: return
+
         chat_session = user_chats[user_id]
         
         for i in range(len(chat_session.history) - 1, -1, -1):
@@ -110,11 +117,11 @@ async def _remove_ai_quiz_context(user_id: int):
         logger.error(f"Failed to clean up AI context for user {user_id}: {e}", exc_info=True)
 
 # ================================================================================= #
-# ===> END: "PRO MOVE" LOGIC <===
+# ===> QuizSession Class (UPDATED FOR THE FIX) <===
 # ================================================================================= #
 
-
 class QuizSession:
+    # ... (__init__, start functions poore same rahenge) ...
     def __init__(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int, set_id: str, quiz_data: dict, is_temp_quiz: bool = False):
         self.context = context
         self.chat_id = chat_id
@@ -144,6 +151,7 @@ class QuizSession:
         await self.send_next_question()
 
     async def send_next_question(self):
+        # ... (function ka start poora same rahega) ...
         delete_task = None
         if self.active_poll_message_id:
             delete_task = self.context.bot.delete_message(self.chat_id, self.active_poll_message_id)
@@ -156,8 +164,10 @@ class QuizSession:
             return
         
         if len(self.results) == 0:
-            asyncio.create_task(_update_ai_context_with_quiz_state(self.chat_id, self))
+            # === THE FIX IS HERE ===
+            asyncio.create_task(_update_ai_context_with_quiz_state(self.context, self.chat_id, self))
 
+        # ... (baaki ka send_next_question logic poora same rahega) ...
         question_id = self.questions_queue[0]
         question_data = get_question_by_id_from_data(question_id, self.questions_data)
         question_timer = question_data.get('timer_seconds', SECONDS_PER_QUESTION)
@@ -188,7 +198,9 @@ class QuizSession:
         
         self.context.job_queue.run_once(self.handle_timeout_job, question_timer + 1.5, data={'poll_id': self.active_poll_id}, name=f"timeout_{self.active_poll_id}")
 
+
     async def handle_answer(self, update: Update):
+        # ... (function ka start poora same rahega) ...
         poll_id = self.active_poll_id
         jobs = self.context.job_queue.get_jobs_by_name(f"timeout_{poll_id}")
         for job in jobs: job.schedule_removal()
@@ -206,20 +218,14 @@ class QuizSession:
         self.total_score += points
         self.results.append({'question_id': question_id, 'status': status, 'points_earned': points, 'time_taken': time_taken, 'answered_option_id': answer.option_ids[0]})
         
-        asyncio.create_task(_update_ai_context_with_quiz_state(update.poll_answer.user.id, self))
+        # === THE FIX IS HERE ===
+        asyncio.create_task(_update_ai_context_with_quiz_state(self.context, update.poll_answer.user.id, self))
 
         await asyncio.sleep(0.7)
         await self.send_next_question()
 
-    async def handle_timeout_job(self, context: ContextTypes.DEFAULT_TYPE):
-        poll_id = context.job.data['poll_id']
-        if poll_id in self.context.bot_data:
-            self.consecutive_timeouts += 1
-            if self.consecutive_timeouts >= CONSECUTIVE_TIMEOUT_LIMIT:
-                await self.suspend_quiz(); return
-            await self.handle_closure(poll_id=poll_id)
-            
     async def handle_closure(self, poll_id: str, stopped=False, postponed=False, skipped=False):
+        # ... (function ka start poora same rahega) ...
         quiz_info = self.context.bot_data.pop(poll_id, None)
         if not quiz_info or not self.questions_queue or self.is_suspended: return
         if quiz_info.get("question_id") == self.questions_queue[0]:
@@ -234,7 +240,8 @@ class QuizSession:
             elif stopped: status = 'stopped'
             self.results.append({'question_id': question_id, 'status': status, 'points_earned': 0, 'time_taken': question_timer, 'answered_option_id': None})
             
-            asyncio.create_task(_update_ai_context_with_quiz_state(self.chat_id, self))
+            # === THE FIX IS HERE ===
+            asyncio.create_task(_update_ai_context_with_quiz_state(self.context, self.chat_id, self))
 
             if not self.questions_queue or stopped:
                 await self.show_final_score()
@@ -242,6 +249,7 @@ class QuizSession:
                 await self.send_next_question()
 
     async def suspend_quiz(self):
+        # ... (function ka start poora same rahega) ...
         if self.is_suspended: return
         self.is_suspended = True
         if self.active_poll_id in self.context.bot_data: self.context.bot_data.pop(self.active_poll_id)
@@ -254,9 +262,12 @@ class QuizSession:
         keyboard = [[InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_try_again:{self.set_id}')]]
         await self.context.bot.send_message(self.chat_id, text="⚠️ Quiz session has been suspended due to inactivity.", reply_markup=InlineKeyboardMarkup(keyboard))
         
-        asyncio.create_task(_remove_ai_quiz_context(self.chat_id))
+        # === THE FIX IS HERE ===
+        asyncio.create_task(_remove_ai_quiz_context(self.context, self.chat_id))
+
 
     async def show_final_score(self):
+        # ... (Yeh function poora same rahega) ...
         if self.is_suspended: return
         self.is_suspended = True
 
@@ -283,12 +294,17 @@ class QuizSession:
         
         asyncio.create_task(self.get_final_commentary_from_ai())
 
+
     async def get_final_commentary_from_ai(self):
         """Final commentary ke liye AI ko trigger karta hai aur context clean karta hai."""
         try:
+            # === THE FIX IS HERE ===
+            user_chats = self.context.bot_data.get('user_chats', {})
             if self.chat_id not in user_chats: return
+
             chat_session = user_chats[self.chat_id]
             
+            # ... (baaki ka logic poora same rahega) ...
             prompt_for_ai = (
                 "The quiz has just finished. Your internal live report is now complete. "
                 "Based on this final report, provide a fun, engaging, and personalized final commentary to the user. "
@@ -312,6 +328,7 @@ class QuizSession:
         except Exception as e:
             logger.error(f"Failed to get final commentary from AI for user {self.chat_id}: {e}", exc_info=True)
         finally:
-            await _remove_ai_quiz_context(self.chat_id)
+            # === THE FIX IS HERE ===
+            await _remove_ai_quiz_context(self.context, self.chat_id)
 
 # --- END OF FINAL CORRECTED FILE quizzes/play_quiz.py ---
