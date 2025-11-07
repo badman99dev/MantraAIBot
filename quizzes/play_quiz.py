@@ -1,4 +1,4 @@
-# --- START OF UPDATED FILE quizzes/play_quiz.py ---
+# --- START OF FINAL CORRECTED FILE quizzes/play_quiz.py ---
 
 import asyncio
 import time
@@ -12,9 +12,8 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
-# === MODIFIED IMPORTS ===
-# In functions se humein quiz data aur AI chat session milega
-from .user_quiz_data import get_question_by_id_from_data
+# === MODIFIED IMPORTS (THE FIX) ===
+# Hum ab 'get_question_by_id_from_data' ko import nahi karenge kyunki woh isi file mein hai
 from ai_manager import user_chats 
 from response_filter import sanitize_html
 
@@ -30,8 +29,12 @@ RESULTS_DIR = "quiz_results"
 
 
 # ================================================================================= #
-# ===> START: NAYA "PRO MOVE" LOGIC (LIVE CONTEXT INJECTION) <===
+# ===> START: "PRO MOVE" LOGIC (LIVE CONTEXT INJECTION) <===
 # ================================================================================= #
+
+def get_question_by_id_from_data(qid, questions_data):
+    """Helper to find a specific question from the question list."""
+    return next((q for q in questions_data if q["id"] == qid), None)
 
 def _generate_live_quiz_report(session: 'QuizSession') -> str:
     """AI ke context ke liye ek live report string banata hai."""
@@ -77,7 +80,6 @@ async def _update_ai_context_with_quiz_state(user_id: int, session: 'QuizSession
         live_report = _generate_live_quiz_report(session)
         if not live_report: return
 
-        # History ko ulta check karo taaki last report jaldi mil jaye
         for i in range(len(chat_session.history) - 1, -1, -1):
             if chat_session.history[i].role == 'model':
                 if "--- 🔴 LIVE QUIZ REPORT" in chat_session.history[i].parts[0].text:
@@ -85,7 +87,6 @@ async def _update_ai_context_with_quiz_state(user_id: int, session: 'QuizSession
                     logger.info(f"Updated live quiz context for user {user_id}")
                     return
 
-        # Agar pichli report nahi mili (quiz ka pehla update hai)
         from google.generativeai.types import content_types
         new_content = content_types.to_content({'role': 'model', 'parts': [{'text': live_report}]})
         chat_session.history.append(new_content)
@@ -108,13 +109,11 @@ async def _remove_ai_quiz_context(user_id: int):
     except Exception as e:
         logger.error(f"Failed to clean up AI context for user {user_id}: {e}", exc_info=True)
 
-
 # ================================================================================= #
-# ===> END: NAYA "PRO MOVE" LOGIC <===
+# ===> END: "PRO MOVE" LOGIC <===
 # ================================================================================= #
 
 
-# --- The Game Session Class ---
 class QuizSession:
     def __init__(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int, set_id: str, quiz_data: dict, is_temp_quiz: bool = False):
         self.context = context
@@ -156,8 +155,6 @@ class QuizSession:
             await self.show_final_score()
             return
         
-        # === NAYA CODE ===
-        # Pehle question par context inject karo
         if len(self.results) == 0:
             asyncio.create_task(_update_ai_context_with_quiz_state(self.chat_id, self))
 
@@ -209,8 +206,6 @@ class QuizSession:
         self.total_score += points
         self.results.append({'question_id': question_id, 'status': status, 'points_earned': points, 'time_taken': time_taken, 'answered_option_id': answer.option_ids[0]})
         
-        # === NAYA CODE ===
-        # Har answer ke baad context update karo
         asyncio.create_task(_update_ai_context_with_quiz_state(update.poll_answer.user.id, self))
 
         await asyncio.sleep(0.7)
@@ -239,8 +234,6 @@ class QuizSession:
             elif stopped: status = 'stopped'
             self.results.append({'question_id': question_id, 'status': status, 'points_earned': 0, 'time_taken': question_timer, 'answered_option_id': None})
             
-            # === NAYA CODE ===
-            # Timeout/Skip/Stop par context update karo
             asyncio.create_task(_update_ai_context_with_quiz_state(self.chat_id, self))
 
             if not self.questions_queue or stopped:
@@ -261,8 +254,6 @@ class QuizSession:
         keyboard = [[InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_try_again:{self.set_id}')]]
         await self.context.bot.send_message(self.chat_id, text="⚠️ Quiz session has been suspended due to inactivity.", reply_markup=InlineKeyboardMarkup(keyboard))
         
-        # === NAYA CODE ===
-        # Inactivity par context clean karo
         asyncio.create_task(_remove_ai_quiz_context(self.chat_id))
 
     async def show_final_score(self):
@@ -290,11 +281,8 @@ class QuizSession:
 
         await self.context.bot.send_message(self.chat_id, text=score_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
         
-        # === NAYA CODE ===
-        # Ab hum final commentary ke liye AI ko trigger karenge
         asyncio.create_task(self.get_final_commentary_from_ai())
 
-    # === NAYA FUNCTION (Class ke andar) ===
     async def get_final_commentary_from_ai(self):
         """Final commentary ke liye AI ko trigger karta hai aur context clean karta hai."""
         try:
@@ -310,7 +298,6 @@ class QuizSession:
             await self.context.bot.send_chat_action(self.chat_id, 'typing')
             response = await chat_session.send_message_async(prompt_for_ai)
             
-            # AI ke response ko user ko bhejo
             raw_chunks = response.text.split("\n---\n")
             for chunk in raw_chunks:
                 stripped_chunk = chunk.strip()
@@ -325,7 +312,6 @@ class QuizSession:
         except Exception as e:
             logger.error(f"Failed to get final commentary from AI for user {self.chat_id}: {e}", exc_info=True)
         finally:
-            # Bahut important: Commentary ke baad context hamesha clean karo
             await _remove_ai_quiz_context(self.chat_id)
 
-# --- END OF UPDATED FILE quizzes/play_quiz.py ---
+# --- END OF FINAL CORRECTED FILE quizzes/play_quiz.py ---
