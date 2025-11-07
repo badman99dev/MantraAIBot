@@ -1,4 +1,4 @@
-# --- START OF ULTIMATE FINAL CORRECTED FILE quizzes/play_quiz.py ---
+# --- START OF THE TRUE, FINAL, COMPLETE FILE quizzes/play_quiz.py ---
 
 import asyncio
 import time
@@ -32,21 +32,41 @@ RESULTS_DIR = "quiz_results"
 
 
 # ================================================================================= #
-# ===> "PRO MOVE" LOGIC (ULTIMATE FINAL VERSION) <===
+# ===> AI CONTEXT LOGIC (FINAL v-ULTIMATE) <===
 # ================================================================================= #
 
 def get_question_by_id_from_data(qid, questions_data):
     return next((q for q in questions_data if q["id"] == qid), None)
 
 def _generate_live_quiz_report(session: 'QuizSession') -> str:
-    """AI ke context ke liye ek live report string banata hai. (ULTIMATE VERSION)"""
+    """AI ke context ke liye ek live report string banata hai. (ABSOLUTE FINAL v2)"""
     if not hasattr(session, 'questions_data'): return ""
+
+    total_questions = len(session.questions_data)
+    skipped_count = sum(1 for r in session.results if r['status'] == 'skipped')
+    postponed_ids = [qid for qid in session.questions_queue if getattr(session, f"is_postponed_{qid}", False)]
+    postponed_count = len(postponed_ids)
+    
+    answered_count = len(session.results) - skipped_count
+    
+    quiz_status = "In Progress..."
+    if session.stop_reason == "stopped_by_user":
+        quiz_status = "Manually stopped by the user."
+    elif not session.questions_queue and not postponed_ids:
+        quiz_status = "Completed (All questions attempted)."
+    elif session.is_suspended:
+        quiz_status = "Suspended by the system due to inactivity."
+    elif session.stop_reason == "finished_naturally" and (not session.questions_queue or answered_count == total_questions):
+        quiz_status = "Finished."
 
     report_lines = [
         "--- 🔴 LIVE QUIZ REPORT (For AI's Eyes Only. Do not show this block to the user.) ---",
         f"Quiz Name: {escape(session.quiz_name)}",
+        f"Overall Status: {quiz_status}",
+        f"Total Questions: {total_questions}",
+        f"Answered: {answered_count} | Skipped: {skipped_count} | Postponed: {postponed_count}",
         f"Current Score: {session.total_score}",
-        "--- STATUS OF QUESTIONS ---",
+        "--- DETAILED QUESTION-BY-QUESTION STATUS ---",
     ]
     
     for result in session.results:
@@ -57,14 +77,13 @@ def _generate_live_quiz_report(session: 'QuizSession') -> str:
         time_info = ""
         allotted_time = q_data.get('timer_seconds', SECONDS_PER_QUESTION)
 
-        # === UPGRADE: Time details added ===
         if status in ['correct', 'wrong']:
             time_taken = result['time_taken']
             time_info = f" (Answered in {time_taken:.1f}s / {allotted_time}s)"
         elif status == 'timed_out':
             time_info = f" (⏰ Timed Out after {allotted_time}s)"
         elif status == 'skipped':
-            time_info = " (⏩ Skipped)"
+            time_info = " (⏩ Skipped by user)"
         
         report_lines.append(f"  Q: {escape(q_data['question'])}{time_info}")
         
@@ -86,7 +105,9 @@ def _generate_live_quiz_report(session: 'QuizSession') -> str:
         q_data = get_question_by_id_from_data(current_q_id, session.questions_data)
         if q_data:
             report_lines.append(f"--- ⏳ CURRENT QUESTION ON USER'S SCREEN ---")
-            report_lines.append(f"  Question: {escape(q_data['question'])}")
+            is_postponed_q = getattr(session, f"is_postponed_{current_q_id}", False)
+            q_status = "(This is a postponed question being asked again)" if is_postponed_q else ""
+            report_lines.append(f"  Question: {escape(q_data['question'])} {q_status}")
             options_text = [f"    - Option {i}: {escape(opt)}" for i, opt in enumerate(q_data['options'])]
             report_lines.extend(options_text)
             correct_option_index = q_data['correct_option_id']
@@ -100,7 +121,6 @@ def _generate_live_quiz_report(session: 'QuizSession') -> str:
     return "\n".join(report_lines)
 
 async def _update_ai_context_with_quiz_state(context: ContextTypes.DEFAULT_TYPE, user_id: int, session: 'QuizSession'):
-    # ... (Yeh function ab perfect hai, ismein koi change nahi) ...
     try:
         user_chats = context.bot_data.get('user_chats', {})
         if user_id not in user_chats: return
@@ -120,7 +140,6 @@ async def _update_ai_context_with_quiz_state(context: ContextTypes.DEFAULT_TYPE,
         logger.error(f"Failed to update AI context for user {user_id}: {e}", exc_info=True)
 
 async def _remove_ai_quiz_context(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    # ... (Yeh function ab perfect hai, ismein koi change nahi) ...
     try:
         user_chats = context.bot_data.get('user_chats', {})
         if user_id not in user_chats: return
@@ -133,9 +152,7 @@ async def _remove_ai_quiz_context(context: ContextTypes.DEFAULT_TYPE, user_id: i
     except Exception as e:
         logger.error(f"Failed to clean up AI context for user {user_id}: {e}", exc_info=True)
 
-# === NEW FUNCTION for inactivity ===
 async def _inject_suspension_context(context: ContextTypes.DEFAULT_TYPE, user_id: int, quiz_name: str):
-    """Quiz suspend hone par AI ki memory mein ek special note daalta hai."""
     try:
         user_chats = context.bot_data.get('user_chats', {})
         if user_id in user_chats:
@@ -154,14 +171,13 @@ async def _inject_suspension_context(context: ContextTypes.DEFAULT_TYPE, user_id
         logger.error(f"Failed to inject suspension note for user {user_id}: {e}", exc_info=True)
 
 # ================================================================================= #
-# ===> The Game Session Class (ULTIMATE VERSION) <===
+# ===> The Game Session Class (FINAL VERSION) <===
 # ================================================================================= #
 
 class QuizSession:
     def __init__(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int, set_id: str, quiz_data: dict, is_temp_quiz: bool = False):
         self.context = context
         self.chat_id = chat_id
-        # ... (baaki sab same) ...
         self.set_id = set_id
         self.quiz_name = quiz_data.get('name', 'Custom Quiz')
         self.questions_data = list(quiz_data.get('questions', []))
@@ -175,8 +191,8 @@ class QuizSession:
         self.consecutive_timeouts = 0
         self.is_suspended = False
         self.is_temp_quiz = is_temp_quiz
+        self.stop_reason = "finished_naturally"
 
-    # ... (start, send_next_question, handle_answer, handle_timeout_job, handle_closure functions poore same rahenge) ...
     async def start(self):
         try:
             msg = await self.context.bot.send_message(self.chat_id, text="Get Ready... 3️⃣")
@@ -267,6 +283,10 @@ class QuizSession:
                 setattr(self, f"is_postponed_{question_id}", True); status = 'postponed'
             elif skipped: status = 'skipped'
             elif stopped: status = 'stopped'
+            
+            if stopped:
+                self.stop_reason = "stopped_by_user"
+
             self.results.append({'question_id': question_id, 'status': status, 'points_earned': 0, 'time_taken': question_timer, 'answered_option_id': None})
             asyncio.create_task(_update_ai_context_with_quiz_state(self.context, self.chat_id, self))
             if not self.questions_queue or stopped:
@@ -274,7 +294,6 @@ class QuizSession:
             else:
                 await self.send_next_question()
 
-    # === UPGRADED suspend_quiz function ===
     async def suspend_quiz(self):
         if self.is_suspended: return
         self.is_suspended = True
@@ -287,13 +306,9 @@ class QuizSession:
         logger.warning(f"Quiz suspended for chat {self.chat_id} due to inactivity.")
         keyboard = [[InlineKeyboardButton("🔄      Try Again      🔄", callback_data=f'quizgame_try_again:{self.set_id}')]]
         await self.context.bot.send_message(self.chat_id, text="⚠️ Quiz session has been suspended due to inactivity.", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-        # Pehle live report ko clean karo
         await _remove_ai_quiz_context(self.context, self.chat_id)
-        # Phir naya suspension note inject karo
         await _inject_suspension_context(self.context, self.chat_id, self.quiz_name)
 
-    # ... (show_final_score and get_final_commentary_from_ai functions poore same rahenge) ...
     async def show_final_score(self):
         if self.is_suspended: return
         self.is_suspended = True
@@ -343,4 +358,4 @@ class QuizSession:
         finally:
             await _remove_ai_quiz_context(self.context, self.chat_id)
 
-# --- END OF ULTIMATE FINAL CORRECTED FILE quizzes/play_quiz.py ---
+# --- END OF THE TRUE, FINAL, COMPLETE FILE quizzes/play_quiz.py ---
