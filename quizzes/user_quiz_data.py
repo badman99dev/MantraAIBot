@@ -1,4 +1,4 @@
-# quizzes/user_quiz_data.py
+# --- START OF UPDATED FILE quizzes/user_quiz_data.py ---
 
 """
 This module is the "Artist". It takes raw quiz result data
@@ -8,24 +8,29 @@ It handles all the special fonts, symbols, HTML tags, and message splitting.
 
 from html import escape
 
-def get_question_by_id_from_data(qid, questions_data):
-    """Helper to find a specific question from the question list."""
-    return next((q for q in questions_data if q["id"] == qid), None)
+# === REMOVED FUNCTION ===
+# get_question_by_id_from_data function yahan se hata diya gaya hai
+# aur play_quiz.py mein move kar diya gaya hai to avoid circular imports.
 
 def format_detailed_review(results: list, quiz_name: str, questions_data: list) -> list:
     """
     Takes quiz results and returns a list of formatted message strings,
     split to respect Telegram's message length limits.
     """
+    
+    # === ADDED HELPER FUNCTION INSIDE ===
+    # Hum is function ko yahin locally define kar lenge
+    def get_question_by_id(qid, data):
+        return next((q for q in data if q["id"] == qid), None)
+        
     message_chunks = []
     current_chunk = f"📝 ║  <b>𝐃𝐄𝐓𝐀𝐈𝐋𝐄𝐃 𝐑𝐄𝐕𝐈𝐄𝐖 » {escape(quiz_name)}</b>  ║ 📝\n\n"
     
     for i, result in enumerate(results):
-        question_data = get_question_by_id_from_data(result['question_id'], questions_data)
+        question_data = get_question_by_id(result['question_id'], questions_data)
         if not question_data:
             continue
 
-        # Escape all user-facing text to prevent HTML errors
         escaped_question = escape(question_data['question'])
         escaped_options = [escape(opt) for opt in question_data['options']]
         
@@ -46,11 +51,10 @@ def format_detailed_review(results: list, quiz_name: str, questions_data: list) 
             'skipped': "Sᴛᴀᴛᴜs: Sᴋɪᴘᴘᴇᴅ ║ Pᴏɪɴᴛs: +0 ║ Tɪᴍᴇ: ---",
             'timed_out': "Sᴛᴀᴛᴜs: Tɪᴍᴇ's Uᴘ ║ Pᴏɪɴᴛs: +0 ║ Tɪᴍᴇ: ---",
             'stopped': "Sᴛᴀᴛᴜs: Sᴛᴏᴘᴘᴇᴅ ║ Pᴏɪɴᴛs: +0 ║ Tɪᴍᴇ: ---",
-            'postponed': "Sᴛᴀᴛᴜs: Pᴏsᴛᴘᴏɴᴇᴅ" # This is just for logic, not displayed
+            'postponed': "Sᴛᴀᴛᴜs: Pᴏsᴛᴘᴏɴᴇᴅ"
         }
         result_text = status_map.get(result['status'], "Sᴛᴀᴛᴜs: Uɴᴋɴᴏᴡɴ")
 
-        # We don't need to show the full review for a postponed question
         if result['status'] == 'postponed':
             continue
 
@@ -60,15 +64,15 @@ def format_detailed_review(results: list, quiz_name: str, questions_data: list) 
             f"{options_text}\n↳  {result_text}\n\n"
         )
         
-        # Split message if it gets too long for Telegram
         if len(current_chunk) + len(question_review) > 4000:
             message_chunks.append(current_chunk)
             current_chunk = ""
         current_chunk += question_review
 
-    # Ensure even if there are no questions reviewed, a message is sent
     if not any(r['status'] != 'postponed' for r in results):
-        return [] # Return empty list if no questions were actually answered/skipped etc.
+        return []
 
     message_chunks.append(current_chunk)
     return message_chunks
+
+# --- END OF UPDATED FILE quizzes/user_quiz_data.py ---
